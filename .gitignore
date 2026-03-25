@@ -1,0 +1,16 @@
+# Dependencies & build
+node_modules
+dist
+
+# Local env / secrets
+.env
+.env.*
+!.env.example
+
+# Vercel (local link; re-link on other machines if needed)
+.vercel
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+*.log

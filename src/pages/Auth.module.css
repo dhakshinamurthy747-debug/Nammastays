@@ -1,0 +1,89 @@
+.page {
+  min-height: 100vh; display: flex; align-items: center; justify-content: center;
+  padding: 100px 24px 60px; position: relative;
+  background: linear-gradient(135deg, var(--cream) 0%, var(--warm-white) 55%, #efe6d8 100%);
+}
+
+.card {
+  position: relative; background: var(--white);
+  border: 1.5px solid var(--border);
+  padding: 52px; width: 100%; max-width: 480px;
+  box-shadow: var(--shadow);
+  border-radius: var(--radius);
+}
+
+.logo {
+  display: block; font-family: var(--font-serif); font-size: 18px; font-weight: 700;
+  letter-spacing: 3px; color: var(--ink); margin-bottom: 36px;
+  text-align: center;
+}
+
+.title {
+  font-family: var(--font-serif); font-size: 40px; font-weight: 700;
+  color: var(--ink); margin-bottom: 10px; text-align: center;
+}
+
+.sub {
+  font-size: 15px; color: var(--body); text-align: center; margin-bottom: 32px;
+  line-height: 1.7;
+}
+
+.form { display: flex; flex-direction: column; gap: 20px; }
+
+.phoneWrap {
+  position: relative; display: flex; align-items: center;
+  border: 1.5px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--white); transition: border-color 0.2s, box-shadow 0.2s;
+}
+.phoneWrap:focus-within {
+  border-color: var(--burg-mid);
+  box-shadow: 0 0 0 3px rgba(107, 29, 46, 0.1);
+}
+.phoneIcon {
+  flex-shrink: 0; margin-left: 14px; color: var(--muted);
+}
+.phoneInput {
+  border: none !important; box-shadow: none !important;
+  padding-left: 10px !important; background: transparent !important;
+}
+.phoneInput:focus { outline: none; }
+
+.passwordWrap { position: relative; }
+.eyeBtn {
+  position: absolute; right: 14px; top: 50%; transform: translateY(-50%);
+  color: var(--muted); transition: color 0.3s;
+}
+.eyeBtn:hover { color: var(--sage); }
+
+.switch {
+  text-align: center; font-size: 15px; color: var(--body); margin-top: 28px;
+}
+.switchLink { color: var(--burg-mid); font-weight: 500; transition: opacity 0.3s; }
+.switchLink:hover { opacity: 0.75; }
+
+/* Role cards */
+.roleRow { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.roleCard {
+  padding: 18px; border: 1.5px solid var(--border);
+  cursor: pointer; transition: all 0.3s; position: relative;
+  border-radius: var(--radius);
+}
+.roleCard:hover { border-color: rgba(107, 29, 46, 0.35); }
+.roleActive { border-color: var(--burg) !important; background: rgba(107, 29, 46, 0.07) !important; }
+
+.roleCheck {
+  width: 18px; height: 18px; border-radius: 50%;
+  border: 1.5px solid var(--border2); color: var(--burg-mid);
+  display: flex; align-items: center; justify-content: center;
+  margin-bottom: 10px;
+}
+.roleActive .roleCheck { background: var(--burg); color: var(--warm-white); border-color: var(--burg); }
+
+.roleLabel { font-size: 15px; color: var(--ink); margin-bottom: 4px; font-weight: 500; }
+.roleDesc { font-size: 13px; color: var(--muted); }
+
+@media (max-width: 520px) {
+  .card { padding: 36px 24px; }
+  .roleRow { grid-template-columns: 1fr; }
+}
+

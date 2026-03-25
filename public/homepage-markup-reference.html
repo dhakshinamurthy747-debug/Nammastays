@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NammaStays — Homepage markup reference</title>
+    <!--
+      Static HTML snapshot of routes/MainLayout + pages/Home + Footer.
+      The real app renders this via React (Home.jsx) and CSS modules.
+      Open the app with: npm run dev → http://localhost:5173/
+    -->
+    <style>
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
+      .skip-link {
+        position: absolute;
+        left: -9999px;
+        top: 8px;
+        z-index: 9999;
+        padding: 8px 16px;
+        background: #1a2420;
+        color: #fff;
+      }
+      .skip-link:focus {
+        left: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <a href="#main-content" class="skip-link">Skip to main</a>
+
+    <!-- ══════════ MainLayout: Navbar ══════════ -->
+    <nav aria-label="Main">
+      <div>
+        <a href="/"> <span>Namma</span><span>Stays</span> </a>
+        <span aria-hidden="true"></span>
+        <div>
+          <a href="/properties">Properties</a>
+          <a href="/about">About</a>
+        </div>
+        <span aria-hidden="true"></span>
+        <div>
+          <a href="/login">Sign In</a>
+          <a href="/signup">Join</a>
+        </div>
+      </div>
+    </nav>
+
+    <!-- ══════════ pages/Home ══════════ -->
+    <main id="main-content">
+      <div data-page="home">
+        <!-- HERO -->
+        <section data-section="hero" aria-label="Hero">
+          <div data-hero="left">
+            <div data-decor aria-hidden="true"></div>
+            <div data-hero="content">
+              <div data-animate="fade-up">
+                <span data-dot aria-hidden="true"></span>
+                <span>India's most curated private stays</span>
+              </div>
+
+              <h1 data-animate="fade-up-delay-1">
+                Private stays so selective,<br />
+                we personally approve<br />
+                <em>every single one.</em>
+              </h1>
+
+              <p data-animate="fade-up-delay-2">
+                Every property on NammaStays is personally inspected by us — for quality, comfort, and everything in between — before it's approved. Our promise to you: check in, and everything just works.
+              </p>
+
+              <form role="search" aria-label="Find a stay" action="/properties" method="get" title="Location first, then dates and guests. Search unlocks when all are valid.">
+                <p data-flow="intro">
+                  <span>1 Location</span>
+                  <span aria-hidden="true">→</span>
+                  <span>2 Dates</span>
+                  <span aria-hidden="true">→</span>
+                  <span>3 Guests</span>
+                  <span aria-hidden="true">·</span>
+                  <span>then search</span>
+                </p>
+
+                <div data-search="row-1">
+                  <label for="hero-location" class="sr-only">Destination or area</label>
+                  <div data-search="location-row">
+                    <!-- MapPin icon in React -->
+                    <input
+                      id="hero-location"
+                      name="q"
+                      type="text"
+                      autocomplete="off"
+                      placeholder="Where? Try Delhi, Goa, Kerala…"
+                      aria-label="Destination or area"
+                    />
+                  </div>
+                  <span data-hint> Suggestions appear as you type; dates unlock after 2+ characters or a full pick. </span>
+                </div>
+
+                <div data-search="row-2">
+                  <fieldset data-step="dates" disabled>
+                    <legend class="sr-only">Check-in and check-out</legend>
+                    <div data-pair>
+                      <div data-field>
+                        <label for="hero-checkin">In</label>
+                        <input id="hero-checkin" name="checkIn" type="date" />
+                      </div>
+                      <div data-field>
+                        <label for="hero-checkout">Out</label>
+                        <input id="hero-checkout" name="checkOut" type="date" />
+                      </div>
+                    </div>
+                  </fieldset>
+
+                  <fieldset data-step="guests" disabled>
+                    <legend class="sr-only">Adults and children</legend>
+                    <div data-pair>
+                      <div data-field>
+                        <label for="hero-adults">Adults</label>
+                        <select id="hero-adults" name="guests_adults">
+                          <option value="1">1</option>
+                          <option value="2" selected>2</option>
+                        </select>
+                      </div>
+                      <div data-field>
+                        <label for="hero-children">Kids</label>
+                        <select id="hero-children" name="children">
+                          <option value="0" selected>0</option>
+                          <option value="1">1</option>
+                        </select>
+                      </div>
+                    </div>
+                  </fieldset>
+
+                  <div data-search="submit-wrap">
+                    <span class="sr-only">Submit search</span>
+                    <button type="submit" disabled>Search</button>
+                  </div>
+                </div>
+              </form>
+
+              <div data-animate="fade-up-delay-4">
+                <a href="/properties">Browse all filters</a>
+              </div>
+
+              <div data-animate="fade-up-delay-5" data-hero="stats">
+                <div data-stat>
+                  <div data-stat-num>47</div>
+                  <div data-stat-label>Properties</div>
+                </div>
+                <div data-stat>
+                  <div data-stat-num>18</div>
+                  <div data-stat-label>States</div>
+                </div>
+                <div data-stat>
+                  <div data-stat-num>4.97</div>
+                  <div data-stat-label>Avg Rating</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div data-hero="right">
+            <img
+              src="https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&amp;fit=crop&amp;q=85&amp;w=1000"
+              srcset="
+                https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&amp;fit=crop&amp;q=85&amp;w=640   640w,
+                https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&amp;fit=crop&amp;q=85&amp;w=1000 1000w,
+                https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&amp;fit=crop&amp;q=85&amp;w=1400 1400w
+              "
+              sizes="(max-width: 900px) 100vw, 45vw"
+              width="1000"
+              height="667"
+              alt="Luxury private villa with pool at dusk"
+              fetchpriority="high"
+              decoding="async"
+            />
+            <div data-hero="overlay" aria-hidden="true"></div>
+
+            <aside data-float="collection" aria-label="Collection snapshot">
+              <header>
+                <span>The Collection</span>
+              </header>
+              <div role="group" aria-label="Collection stats">
+                <div data-float-stat>
+                  <span data-float-num>47</span>
+                  <span data-float-label>Properties</span>
+                </div>
+                <div data-float-stat>
+                  <span data-float-num>18</span>
+                  <span data-float-label>States</span>
+                </div>
+                <div data-float-stat>
+                  <span data-float-num>4.97</span>
+                  <span data-float-label>Avg. rating</span>
+                </div>
+              </div>
+              <p>Fewer than 2% of applicants accepted</p>
+            </aside>
+          </div>
+        </section>
+
+        <!-- PHILOSOPHY -->
+        <section aria-label="Our standards">
+          <article>
+            <header>
+              <span aria-hidden="true">GEM</span>
+              <span>01</span>
+            </header>
+            <h3>Every Property Inspected</h3>
+            <p>
+              Before any property goes live, we visit it personally — checking quality, interiors, cleanliness, staff, and every detail. No shortcuts.
+            </p>
+          </article>
+          <article>
+            <header>
+              <span aria-hidden="true">SHIELD</span>
+              <span>02</span>
+            </header>
+            <h3>Zero Issues, Guaranteed</h3>
+            <p>
+              Our simple aim: whoever books a stay should face no issues. If something is off, we make it right before you ever arrive.
+            </p>
+          </article>
+          <article>
+            <header>
+              <span aria-hidden="true">CLOCK</span>
+              <span>03</span>
+            </header>
+            <h3>The Finest Stay, Every Time</h3>
+            <p>
+              We only approve properties that we'd be proud to send our own family to. That's the standard. That's the promise.
+            </p>
+          </article>
+        </section>
+
+        <!-- FEATURED -->
+        <section aria-labelledby="featured-heading">
+          <div>
+            <div aria-hidden="true"></div>
+            <div class="section-label">Current Collection</div>
+            <h2 id="featured-heading">
+              The properties we have<br />
+              chosen this season
+            </h2>
+            <p>Each property is personally inspected and approved by us. What you see is exactly what you get.</p>
+
+            <div data-grid="properties">
+              <article data-property-id="1">
+                <a href="/property/1">
+                  <div data-card="image">
+                    <img src="https://images.unsplash.com/photo-1570077188670-e3a8d69ac5ff?w=800&amp;q=80&amp;auto=format&amp;fit=crop" alt="The Lake Palace Villa" loading="eager" decoding="async" />
+                    <span>Heritage Villa</span>
+                    <span><span>₹45,000</span><span>/night</span></span>
+                  </div>
+                  <div data-card="body">
+                    <div><span>Udaipur, Rajasthan</span></div>
+                    <h3>The Lake Palace Villa</h3>
+                    <p>Suspended above the lake, carved into Rajputana legacy</p>
+                    <div><span>6 guests</span><span>3 bedrooms</span><span>4.98 (34)</span></div>
+                    <div><span>Lake View</span><span>Private Butler</span><span>Infinity Pool</span></div>
+                  </div>
+                </a>
+              </article>
+
+              <article data-property-id="2">
+                <a href="/property/2">
+                  <div data-card="image">
+                    <img src="https://images.unsplash.com/photo-1523217582562-09d0def993a6?w=800&amp;q=80&amp;auto=format&amp;fit=crop" alt="The Cardamom Estate" loading="lazy" decoding="async" />
+                    <span>Planter's Estate</span>
+                    <span><span>₹28,000</span><span>/night</span></span>
+                  </div>
+                  <div data-card="body">
+                    <div><span>Coorg, Karnataka</span></div>
+                    <h3>The Cardamom Estate</h3>
+                    <p>A century-old planter's bungalow, reborn in the mist</p>
+                    <div><span>10 guests</span><span>5 bedrooms</span><span>4.96 (51)</span></div>
+                    <div><span>Coffee Plantation</span><span>Jungle Walks</span><span>Plunge Pool</span></div>
+                  </div>
+                </a>
+              </article>
+
+              <article data-property-id="3">
+                <a href="/property/3">
+                  <div data-card="image">
+                    <img src="https://images.unsplash.com/photo-1528360983277-13d401cdc186?w=800&amp;q=80&amp;auto=format&amp;fit=crop" alt="The Ghat Heritage House" loading="lazy" decoding="async" />
+                    <span>Haveli</span>
+                    <span><span>₹22,000</span><span>/night</span></span>
+                  </div>
+                  <div data-card="body">
+                    <div><span>Varanasi, Uttar Pradesh</span></div>
+                    <h3>The Ghat Heritage House</h3>
+                    <p>A 300-year haveli, where the Ganga meets the sacred</p>
+                    <div><span>4 guests</span><span>2 bedrooms</span><span>4.99 (28)</span></div>
+                    <div><span>Ganga View</span><span>Ghat Access</span><span>Heritage Rooms</span></div>
+                  </div>
+                </a>
+              </article>
+
+              <article data-property-id="4">
+                <a href="/property/4">
+                  <div data-card="image">
+                    <img src="https://images.unsplash.com/photo-1596436889106-be35e843f974?w=800&amp;q=80&amp;auto=format&amp;fit=crop" alt="The Bougainvillea House" loading="lazy" decoding="async" />
+                    <span>Portuguese Villa</span>
+                    <span>Fully Booked</span>
+                    <span><span>₹32,000</span><span>/night</span></span>
+                  </div>
+                  <div data-card="body">
+                    <div><span>Assagao, Goa</span></div>
+                    <h3>The Bougainvillea House</h3>
+                    <p>Portuguese villa. Jungle garden. Complete disappearance.</p>
+                    <div><span>8 guests</span><span>4 bedrooms</span><span>4.95 (67)</span></div>
+                    <div><span>Private Pool</span><span>Jungle Garden</span><span>Chef</span></div>
+                  </div>
+                </a>
+              </article>
+
+              <article data-property-id="5">
+                <a href="/property/5">
+                  <div data-card="image">
+                    <img src="https://images.unsplash.com/photo-1531310197839-ccf54634509e?w=800&amp;q=80&amp;auto=format&amp;fit=crop" alt="The Cedar Lodge" loading="lazy" decoding="async" />
+                    <span>Mountain Lodge</span>
+                    <span><span>₹35,000</span><span>/night</span></span>
+                  </div>
+                  <div data-card="body">
+                    <div><span>Manali, Himachal Pradesh</span></div>
+                    <h3>The Cedar Lodge</h3>
+                    <p>Snow, silence, and Himalayan infinity</p>
+                    <div><span>8 guests</span><span>4 bedrooms</span><span>4.97 (42)</span></div>
+                    <div><span>Snow View</span><span>Private Fireplace</span><span>Mountain Guide</span></div>
+                  </div>
+                </a>
+              </article>
+
+              <article data-property-id="6">
+                <a href="/property/6">
+                  <div data-card="image">
+                    <img src="https://images.unsplash.com/photo-1602216056096-3b40cc0c9944?w=800&amp;q=80&amp;auto=format&amp;fit=crop" alt="The Malabar House" loading="lazy" decoding="async" />
+                    <span>Heritage Home</span>
+                    <span><span>₹18,500</span><span>/night</span></span>
+                  </div>
+                  <div data-card="body">
+                    <div><span>Kumarakom, Kerala</span></div>
+                    <h3>The Malabar House</h3>
+                    <p>A 300-year tharavad on a secret backwater</p>
+                    <div><span>12 guests</span><span>6 bedrooms</span><span>4.94 (89)</span></div>
+                    <div><span>Backwater</span><span>Ayurveda</span><span>Houseboat</span></div>
+                  </div>
+                </a>
+              </article>
+            </div>
+
+            <div>
+              <a href="/properties">View All Properties</a>
+            </div>
+          </div>
+        </section>
+
+        <!-- QUOTE -->
+        <section aria-label="Quote">
+          <div aria-hidden="true"></div>
+          <blockquote>
+            <p>
+              &ldquo;We believe a great stay shouldn't come with surprises. Every property is personally verified — so you don't just stay, you
+              <em>experience the best.</em>&rdquo;
+            </p>
+          </blockquote>
+          <div>— Founder, NammaStays</div>
+          <div aria-hidden="true"></div>
+        </section>
+
+        <!-- OWNER CTA -->
+        <section aria-label="For property owners">
+          <div>
+            <div class="section-label">For Property Owners</div>
+            <h2>Your property<br />belongs here</h2>
+            <p>
+              We only list properties that we've personally visited and approved. If your property meets our quality standards, we'd like to hear from you. Every submission is reviewed by our team — not an algorithm.
+            </p>
+            <a href="/list">Submit Your Property</a>
+          </div>
+        </section>
+
+        <!-- ══════════ Footer ══════════ -->
+        <footer>
+          <div>
+            <div>
+              <div>NammaStays</div>
+              <p>India's most curated collection of private stays. Not many. Only the right ones.</p>
+            </div>
+            <div>
+              <div>
+                <div>Discover</div>
+                <a href="/properties">All Properties</a>
+                <a href="/about">Our Philosophy</a>
+                <a href="/signup">Become a Member</a>
+              </div>
+              <div>
+                <div>Owners</div>
+                <a href="/owner">Owner Portal</a>
+                <a href="/list">List a Property</a>
+                <a href="/owner">Standards</a>
+              </div>
+              <div>
+                <div>Company</div>
+                <a href="#">Privacy</a>
+                <a href="#">Terms</a>
+                <a href="#">Contact</a>
+              </div>
+            </div>
+          </div>
+          <div>
+            <span>© 2026 NammaStays. All rights reserved.</span>
+            <span>Fewer than 50 properties. Chosen by hand.</span>
+          </div>
+        </footer>
+      </div>
+    </main>
+  </body>
+</html>

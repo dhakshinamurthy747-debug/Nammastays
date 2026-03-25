@@ -1,0 +1,36 @@
+.page {
+  min-height: calc(100vh - 80px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  padding: 48px 24px 80px;
+  text-align: center;
+}
+
+.code {
+  font-family: var(--font-serif);
+  font-size: clamp(72px, 14vw, 120px);
+  color: var(--muted2);
+  line-height: 1;
+  font-weight: 700;
+}
+
+.text {
+  color: var(--muted);
+  font-size: 17px;
+  letter-spacing: 2px;
+  margin: 0;
+}
+
+.link {
+  font-size: 14px;
+  color: var(--sage);
+  font-weight: 600;
+  text-decoration: underline;
+  margin-top: 8px;
+}
+.link:hover {
+  opacity: 0.85;
+}

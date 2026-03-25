@@ -1,0 +1,63 @@
+﻿.root {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.list {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 6px);
+  margin: 0;
+  padding: 6px 0;
+  list-style: none;
+  max-height: min(280px, 42vh);
+  overflow-y: auto;
+  background: rgba(255, 252, 247, 0.99);
+  border: 1.5px solid rgba(107, 29, 46, 0.18);
+  border-radius: 12px;
+  box-shadow: 0 16px 40px rgba(22, 32, 26, 0.12);
+  z-index: 50;
+}
+
+.item {
+  display: block;
+  width: 100%;
+  padding: 10px 14px;
+  border: none;
+  background: transparent;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+  line-height: 1.35;
+  transition: background 0.15s;
+}
+
+.item:hover,
+.itemActive {
+  background: rgba(107, 29, 46, 0.08);
+}
+
+.item mark {
+  background: rgba(184, 148, 63, 0.22);
+  color: inherit;
+  font-weight: 600;
+  padding: 0 1px;
+  border-radius: 2px;
+}
+
+.emptyHint {
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--muted);
+  margin: 0;
+}
+
