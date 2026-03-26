@@ -313,8 +313,10 @@ select.form-input option { background: var(--white); color: var(--ink); }
 
 /* ── RESPONSIVE ── */
 @media (max-width: 768px) {
-  nav { padding: 20px 24px; }
-  .nav-links { display: none; }
+  /* Navbar spacing is owned by Navbar.module.css (scoped .nav); avoid double padding on <nav> */
+  .nav-links {
+    display: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

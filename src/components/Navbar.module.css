@@ -6,6 +6,7 @@
   left: 0;
   right: 0;
   z-index: 1000;
+  box-sizing: border-box;
   display: flex;
   justify-content: center;
   padding: 14px clamp(16px, 3vw, 36px);
@@ -19,6 +20,15 @@
 
 .nav .bar,
 .nav .bar * {
+  pointer-events: auto;
+}
+
+/* Let clicks pass “through” the rail strip to the page, but keep links/buttons usable */
+.nav .bar .linkRail {
+  pointer-events: none;
+}
+
+.nav .bar .linkRail .link {
   pointer-events: auto;
 }
 
@@ -44,14 +54,22 @@
   box-shadow: 0 4px 30px rgba(74, 16, 32, 0.06);
 }
 
-/* Single glass bar: logo | links (centered) | actions */
+/*
+ * Pill bar: flex left / right; links absolutely centered in the bar so they stay
+ * visually centered everywhere (grid 1fr|auto|1fr broke on mid widths / long link sets).
+ */
 .bar {
+  position: relative;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: clamp(8px, 1.5vw, 20px);
   width: 100%;
-  max-width: min(1040px, 100%);
-  gap: clamp(12px, 2.5vw, 24px);
-  padding: 10px clamp(14px, 2vw, 22px);
+  max-width: min(1120px, calc(100vw - 24px));
+  min-height: 52px;
+  padding: 10px clamp(16px, 3vw, 28px);
+  overflow: visible;
   background: rgba(255, 252, 247, 0.9);
   border: 1px solid rgba(107, 29, 46, 0.14);
   border-radius: 100px;
@@ -61,6 +79,25 @@
     0 0 0 1px rgba(255, 255, 255, 0.4) inset;
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
+}
+
+.barLeft {
+  display: flex;
+  align-items: center;
+  gap: clamp(10px, 2vw, 22px);
+  flex: 0 1 auto;
+  min-width: 0;
+  z-index: 2;
+}
+
+.barRight {
+  display: flex;
+  align-items: center;
+  gap: clamp(10px, 2vw, 22px);
+  flex: 0 1 auto;
+  min-width: 0;
+  justify-content: flex-end;
+  z-index: 2;
 }
 
 .scrolled .bar {
@@ -85,13 +122,15 @@
 
 .logo {
   display: inline-flex;
-  align-items: baseline;
+  align-items: center;
   gap: 2px;
   flex-shrink: 0;
   font-family: var(--font-serif);
   font-size: 22px;
   font-weight: 700;
   letter-spacing: 1.5px;
+  line-height: 1;
+  padding: 2px 0;
   transition: opacity 0.3s, transform 0.25s ease;
 }
 
@@ -135,7 +174,8 @@
 
 .divider {
   width: 1px;
-  height: 26px;
+  height: 24px;
+  align-self: center;
   flex-shrink: 0;
   background: linear-gradient(
     180deg,
@@ -156,17 +196,24 @@
   );
 }
 
-/* Takes remaining space; links sit in the visual centre of the bar */
+/* Center cluster: true bar-center; max-width avoids overlapping logo / actions */
 .linkRail {
-  flex: 1;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: clamp(14px, 2vw, 28px);
-  min-width: 0;
+  flex-wrap: nowrap;
+  gap: clamp(8px, 1.4vw, 20px);
+  width: max-content;
+  max-width: min(720px, calc(100% - 260px));
   overflow-x: auto;
+  overflow-y: visible;
   scrollbar-width: none;
   -ms-overflow-style: none;
+  z-index: 1;
 }
 
 .linkRail::-webkit-scrollbar {
@@ -175,14 +222,18 @@
 
 .link {
   position: relative;
+  display: inline-flex;
+  align-items: center;
   font-size: 12px;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--ink-light);
   font-weight: 600;
   white-space: nowrap;
   transition: color 0.25s ease;
-  padding: 6px 2px;
+  padding: 8px 10px 12px;
+  flex-shrink: 0;
+  box-sizing: border-box;
 }
 
 .atHero .link {
@@ -192,14 +243,15 @@
 .link::after {
   content: '';
   position: absolute;
-  left: 50%;
-  bottom: 0;
-  transform: translateX(-50%);
-  width: 0;
+  left: 10px;
+  right: 10px;
+  bottom: 6px;
   height: 2px;
   border-radius: 2px;
   background: linear-gradient(90deg, var(--amber-lt), var(--amber));
-  transition: width 0.3s var(--ease-out, cubic-bezier(0.22, 1, 0.36, 1));
+  transform: scaleX(0);
+  transform-origin: center;
+  transition: transform 0.3s var(--ease-out, cubic-bezier(0.22, 1, 0.36, 1));
 }
 
 .link:hover,
@@ -214,7 +266,7 @@
 
 .link:hover::after,
 .link.active::after {
-  width: 100%;
+  transform: scaleX(1);
 }
 
 .link:focus-visible {
@@ -313,6 +365,8 @@
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-shrink: 0;
+  padding-left: 2px;
 }
 
 .userName {
@@ -380,41 +434,59 @@
 
 @media (max-width: 900px) {
   .nav {
-    padding: 12px 12px;
+    padding: 10px max(10px, env(safe-area-inset-right)) 10px max(10px, env(safe-area-inset-left));
   }
 
   .nav.scrolled {
-    padding: 10px 12px;
+    padding: 8px max(10px, env(safe-area-inset-right)) 8px max(10px, env(safe-area-inset-left));
   }
 
   .bar {
-    border-radius: 18px;
-    padding: 8px 10px;
+    justify-content: flex-start;
+    border-radius: 20px;
     max-width: none;
+    width: 100%;
+    padding: 8px 10px;
+    min-height: 0;
+    gap: 6px;
     flex-wrap: nowrap;
+  }
+
+  .barLeft {
+    flex-shrink: 0;
     gap: 8px;
-    align-items: center;
+  }
+
+  .barRight {
+    flex-shrink: 0;
+    gap: 6px;
   }
 
   .divider {
     display: none;
   }
 
-  /* Horizontal scroll — keeps Properties / List / About reachable on small screens */
+  /* Back in document flow: scroll between logo and actions */
   .linkRail {
-    display: flex;
+    position: static;
+    transform: none;
     flex: 1 1 0;
     min-width: 0;
+    width: auto;
+    max-width: none;
     justify-content: flex-start;
     overflow-x: auto;
+    overflow-y: visible;
     overscroll-behavior-x: contain;
-    gap: 12px;
+    gap: 10px;
     padding: 4px 2px;
-    margin: 0 -2px;
-    scrollbar-width: none;
-    -ms-overflow-style: none;
-    -webkit-mask-image: linear-gradient(to right, transparent, #000 10px, #000 calc(100% - 10px), transparent);
-    mask-image: linear-gradient(to right, transparent, #000 10px, #000 calc(100% - 10px), transparent);
+    margin: 0;
+    -webkit-mask-image: linear-gradient(to right, transparent 0, #000 12px, #000 calc(100% - 12px), transparent 100%);
+    mask-image: linear-gradient(to right, transparent 0, #000 12px, #000 calc(100% - 12px), transparent 100%);
+  }
+
+  .nav .bar .linkRail {
+    pointer-events: auto;
   }
 
   .linkRail::-webkit-scrollbar {

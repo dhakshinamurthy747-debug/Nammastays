@@ -78,14 +78,14 @@ export default function About() {
       <section id="privacy" className={styles.legal} aria-labelledby="privacy-heading">
         <h2 id="privacy-heading" className={styles.legalTitle}>Privacy</h2>
         <p className={styles.legalText}>
-          NammaStays collects only what we need to run bookings and host payouts—contact details, stay preferences, and verification data you choose to share. We do not sell personal data. For this demo app, data stays in your browser; a live product would spell out retention, third parties, and your rights in full.
+          NammaStays collects only what we need to run bookings and host payouts — contact details, stay preferences, and verification data you choose to share. We do not sell personal data. Until your deployment uses a central server, information you enter may stay on your device; see our full <Link to="/privacy">Privacy</Link> page for details.
         </p>
       </section>
 
       <section id="terms" className={styles.legal} aria-labelledby="terms-heading">
         <h2 id="terms-heading" className={styles.legalTitle}>Terms of use</h2>
         <p className={styles.legalText}>
-          By using this demo you agree listings and availability are illustrative; payments are simulated; and NammaStays is not liable for reliance on sample content. In production, terms would cover cancellation, host obligations, and dispute resolution under applicable Indian law.
+          Use of this platform is subject to our <Link to="/terms">Terms of service</Link>, including cancellation rules, host obligations, and dispute resolution. Listings and availability are managed by hosts and the platform; always confirm details before you travel.
         </p>
       </section>
 

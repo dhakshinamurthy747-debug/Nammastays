@@ -450,7 +450,8 @@ export default function ListProperty() {
             <div className={styles.formSection}>
               <h2 className={styles.formTitle}>Payout &amp; tax details</h2>
               <p className={styles.kycIntro}>
-                We use these details only for owner payouts and tax compliance after your property is approved. Store this browser-side for demo — on production, data would be encrypted in transit and at rest.
+                We use these details for owner payouts and tax compliance after your property is approved. Treat all fields as
+                sensitive; in production, transmit and store them with encryption and access controls.
               </p>
 
               <div className={styles.sectionSub} style={{ marginTop: 8 }}>Bank account (India)</div>

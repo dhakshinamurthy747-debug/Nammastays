@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useMemo, useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { ArrowRight, Shield, Gem, Clock, MapPin, Calendar, Users, Baby } from 'lucide-react'
 import { useApp } from '../context/AppContext'
@@ -6,6 +6,8 @@ import PropertyCard from '../components/PropertyCard'
 import Footer from '../components/Footer'
 import { LocationSearchField } from '../components/LocationSearchField'
 import styles from './Home.module.css'
+import { STORAGE_KEYS } from '../utils/constants'
+import { loadJson } from '../utils/storage'
 
 const LOCATION_MIN_LEN = 2
 
@@ -19,6 +21,14 @@ function stayNights(checkIn, checkOut) {
 
 export default function Home() {
   const { showToast, mergedCatalogProperties } = useApp()
+  const [maintenanceOn, setMaintenanceOn] = useState(
+    () => !!loadJson(STORAGE_KEYS.ADMIN_PLATFORM_SETTINGS, {}).maintenanceMode
+  )
+  useEffect(() => {
+    const read = () => setMaintenanceOn(!!loadJson(STORAGE_KEYS.ADMIN_PLATFORM_SETTINGS, {}).maintenanceMode)
+    window.addEventListener('ns-platform-settings', read)
+    return () => window.removeEventListener('ns-platform-settings', read)
+  }, [])
   const homeFeatured = useMemo(() => {
     const all = mergedCatalogProperties
     const fresh = all.filter(p => p.newListing)
@@ -75,6 +85,13 @@ export default function Home() {
 
   return (
     <div className={styles.page}>
+      {maintenanceOn && (
+        <div className={styles.maintenanceBanner} role="status">
+          <strong>Scheduled maintenance</strong> — We&apos;re polishing a few things behind the scenes. You can still browse
+          and book; if anything looks off, try again shortly or reach us at{' '}
+          <a href="mailto:hello@nammastays.com">hello@nammastays.com</a>.
+        </div>
+      )}
 
       {/* ── HERO ── */}
       <section className={styles.hero}>

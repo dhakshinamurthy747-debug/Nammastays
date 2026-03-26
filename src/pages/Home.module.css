@@ -4,6 +4,21 @@
   --page-gutter: clamp(24px, 5vw, 72px);
 }
 
+.maintenanceBanner {
+  position: relative;
+  z-index: 50;
+  padding: 14px var(--page-gutter);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink);
+  background: linear-gradient(90deg, rgba(224, 168, 85, 0.35), rgba(247, 242, 234, 0.95));
+  border-bottom: 1px solid rgba(107, 29, 46, 0.15);
+}
+.maintenanceBanner a {
+  color: var(--burg-mid);
+  font-weight: 600;
+}
+
 /* ── HERO ── */
 .hero {
   min-height: 100vh;

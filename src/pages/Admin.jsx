@@ -21,11 +21,12 @@ import {
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import Footer from '../components/Footer'
+import { loadDisputes, patchDispute } from '../utils/disputesPersistence'
+import { pushInAppNotification } from '../utils/inAppNotifications'
 import styles from './Admin.module.css'
 
-const TABS = ['Dashboard', 'Properties', 'Users', 'Bookings', 'Applications', 'Settings']
+const TABS = ['Dashboard', 'Properties', 'Users', 'Bookings', 'Moderation', 'Disputes', 'Applications', 'Settings']
 
-const MOCK_APP_STATUS_KEY = 'ns_admin_mock_app_status'
 const ADMIN_SETTINGS_KEY = 'ns_admin_platform_settings'
 const USER_META_KEY = 'ns_user_meta'
 
@@ -38,21 +39,6 @@ const DEFAULT_SETTINGS = {
   applicationsMode: 'open',
   maintenanceMode: false,
 }
-
-const mockUsers = [
-  { id: 1, name: 'Charlotte Meyers', email: 'charlotte@example.com', role: 'guest', bookings: 3, joined: 'Jan 2024', status: 'active' },
-  { id: 2, name: 'James Rousseau', email: 'james@example.com', role: 'guest', bookings: 1, joined: 'Feb 2024', status: 'active' },
-  { id: 3, name: 'Eleni Stavros', email: 'eleni@example.com', role: 'owner', bookings: 0, joined: 'Nov 2021', status: 'active' },
-  { id: 4, name: 'Priya Nair', email: 'priya@example.com', role: 'owner', bookings: 0, joined: 'Mar 2019', status: 'active' },
-  { id: 5, name: 'Test User', email: 'test@example.com', role: 'guest', bookings: 0, joined: 'Mar 2024', status: 'suspended' },
-]
-
-const mockApplicationsSeed = [
-  { id: 1, property: 'Rann of Kutch Retreat', owner: 'Suresh Patel', location: 'Bhuj, Gujarat', submitted: '2024-03-10', status: 'pending' },
-  { id: 2, property: 'Bali Jungle Compound', owner: 'Sari Dewi', location: 'Ubud, Bali', submitted: '2024-03-08', status: 'pending' },
-  { id: 3, property: 'Cape Town Perch', owner: 'David Okafor', location: 'Cape Town, SA', submitted: '2024-03-01', status: 'approved' },
-  { id: 4, property: 'Swiss Chalet Noir', owner: 'Helena Brand', location: 'Zermatt, CH', submitted: '2024-02-28', status: 'rejected' },
-]
 
 function loadJson(key, fallback) {
   try {
@@ -84,11 +70,6 @@ function estGmvForProperty(p, commissionPct) {
   return { gross, platformCut }
 }
 
-function registeredMemberCount() {
-  const o = loadJson(USER_META_KEY, {})
-  return typeof o === 'object' && o ? Object.keys(o).length : 0
-}
-
 function maskBankAcct(n) {
   const s = String(n ?? '').replace(/\D/g, '')
   if (!s) return '—'
@@ -101,12 +82,39 @@ function maskPanAdmin(p) {
   return `${s.slice(0, 2)}••••${s.slice(8)}`
 }
 
+function downloadCsv(filename, lines) {
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+function csvEscape(v) {
+  const s = v == null ? '' : String(v)
+  if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`
+  return s
+}
+
 export default function Admin() {
-  const { user, showToast, bookings, hostListingsByEmail, updateHostListingAdminDecision, mergedCatalogProperties } = useApp()
+  const {
+    user,
+    showToast,
+    bookings,
+    hostListingsByEmail,
+    updateHostListingAdminDecision,
+    mergedCatalogProperties,
+    patchBooking,
+    propertyReviewEntries,
+    moderatePropertyReview,
+  } = useApp()
   const navigate = useNavigate()
   const [tab, setTab] = useState('Dashboard')
   const [openApplicationId, setOpenApplicationId] = useState(null)
-  const [mockAppStatus, setMockAppStatus] = useState(() => loadJson(MOCK_APP_STATUS_KEY, {}))
+  const [userDirVersion, setUserDirVersion] = useState(0)
+  const [disputeRows, setDisputeRows] = useState(() => loadDisputes())
   const [settings, setSettings] = useState(() => ({
     ...DEFAULT_SETTINGS,
     ...loadJson(ADMIN_SETTINGS_KEY, {}),
@@ -117,12 +125,13 @@ export default function Admin() {
     saveJson(ADMIN_SETTINGS_KEY, settings)
   }, [settings])
 
+  useEffect(() => {
+    const r = () => setDisputeRows(loadDisputes())
+    window.addEventListener('ns-disputes', r)
+    return () => window.removeEventListener('ns-disputes', r)
+  }, [])
+
   const mergedApplications = useMemo(() => {
-    const mockRows = mockApplicationsSeed.map(a => ({
-      ...a,
-      kind: 'internal',
-      status: mockAppStatus[a.id] ?? a.status,
-    }))
     const fromHosts = []
     Object.entries(hostListingsByEmail).forEach(([email, list]) => {
       ;(list || []).forEach(l => {
@@ -145,8 +154,8 @@ export default function Admin() {
         })
       })
     })
-    return [...mockRows, ...fromHosts].sort((a, b) => (b.submitted || '').localeCompare(a.submitted || ''))
-  }, [hostListingsByEmail, mockAppStatus])
+    return fromHosts.sort((a, b) => (b.submitted || '').localeCompare(a.submitted || ''))
+  }, [hostListingsByEmail])
 
   const pendingCount = mergedApplications.filter(a => a.status === 'pending').length
 
@@ -167,7 +176,49 @@ export default function Admin() {
   )
   const livePropertyCount = mergedCatalogProperties.length
   const pipelinePending = mergedApplications.filter(a => a.status === 'pending')
-  const membersDisplay = Math.max(mockUsers.length, registeredMemberCount(), 1)
+
+  const registeredUserRows = useMemo(() => {
+    const meta = loadJson(USER_META_KEY, {})
+    if (!meta || typeof meta !== 'object') return []
+    return Object.entries(meta)
+      .map(([email, m]) => {
+        const em = email.trim().toLowerCase()
+        const bookingCount = bookings.filter(
+          b =>
+            String(b.guestEmail || '').trim().toLowerCase() === em &&
+            b.status !== 'cancelled' &&
+            b.status !== 'refunded'
+        ).length
+        let joined = '—'
+        try {
+          if (m.joinedAt)
+            joined = new Date(m.joinedAt).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' })
+        } catch {
+          /* ignore */
+        }
+        const suspended = m.suspended === true
+        return {
+          id: email,
+          name: m.name || email.split('@')[0],
+          email,
+          emailKey: em,
+          role: m.role || 'guest',
+          bookings: bookingCount,
+          joined,
+          kycTier: m.kycTier || 'none',
+          suspended,
+          status: suspended ? 'suspended' : 'active',
+        }
+      })
+      .sort((a, b) => String(a.email).localeCompare(String(b.email)))
+  }, [bookings, userDirVersion])
+
+  const membersDisplay = registeredUserRows.length
+
+  const pendingReviews = useMemo(
+    () => propertyReviewEntries.filter(r => r.moderationStatus === 'pending'),
+    [propertyReviewEntries]
+  )
 
   const kpis = useMemo(
     () => [
@@ -189,14 +240,14 @@ export default function Admin() {
         icon: <Activity size={20} />,
         label: 'Listing traffic (30d)',
         value: `${(totalTraffic / 1000).toFixed(1)}k`,
-        change: 'Views · all live listings',
+        change: 'Projection per listing',
         color: 'var(--sage)',
       },
       {
         icon: <DollarSign size={20} />,
         label: 'Est. platform cut (30d)',
         value: `₹${(totalPlatformGmv / 1000).toFixed(0)}k`,
-        change: `${settings.commissionPct}% of modeled stays`,
+        change: `${settings.commissionPct}% commission basis`,
         color: 'var(--success)',
       },
       {
@@ -210,7 +261,7 @@ export default function Admin() {
         icon: <Users size={20} />,
         label: 'Members (accounts)',
         value: membersDisplay,
-        change: 'Signups in this browser',
+        change: 'Registered accounts',
         color: 'var(--sage)',
       },
     ],
@@ -229,17 +280,8 @@ export default function Admin() {
 
   const updateApplication = useCallback(
     (app, status) => {
-      if (app.kind === 'submission') {
-        updateHostListingAdminDecision(app.ownerEmail, app.listingId, status)
-        showToast(status === 'approved' ? 'Submission approved — host will see status in Hosting.' : 'Submission rejected.')
-      } else {
-        setMockAppStatus(prev => {
-          const next = { ...prev, [app.id]: status }
-          saveJson(MOCK_APP_STATUS_KEY, next)
-          return next
-        })
-        showToast(status === 'approved' ? 'Application approved.' : 'Application rejected.')
-      }
+      updateHostListingAdminDecision(app.ownerEmail, app.listingId, status)
+      showToast(status === 'approved' ? 'Approved — the host will see the update in Hosting.' : 'Submission rejected.')
     },
     [updateHostListingAdminDecision, showToast]
   )
@@ -247,12 +289,16 @@ export default function Admin() {
   const savePlatformSettings = () => {
     saveJson(ADMIN_SETTINGS_KEY, settings)
     setSettingsDirty(false)
+    window.dispatchEvent(new Event('ns-platform-settings'))
     showToast('Platform settings saved.')
   }
 
   const setSetting = (k, v) => {
     setSettings(s => ({ ...s, [k]: v }))
     setSettingsDirty(true)
+    if (k === 'maintenanceMode') {
+      window.dispatchEvent(new Event('ns-platform-settings'))
+    }
   }
 
   if (!user || user.role !== 'admin') {
@@ -347,7 +393,7 @@ export default function Admin() {
                       <div className={styles.dashName}>{a.property}</div>
                       <div className={styles.dashSub}>
                         {a.owner} · {a.location}
-                        {a.kind === 'submission' && <span className={styles.sourceTag}> List flow</span>}
+                        <span className={styles.sourceTag}> List a property</span>
                       </div>
                     </div>
                     <div className={styles.appActions}>
@@ -379,8 +425,9 @@ export default function Admin() {
         {tab === 'Properties' && (
           <div>
             <p className={styles.sectionIntro}>
-              <strong>Live catalog</strong> — properties guests see on the site. Traffic and GMV are modeled for this demo (updates when you change
-              commission under Settings).
+              <strong>Live catalog</strong> — properties guests see on the site. Traffic and estimated platform cut columns are
+              projections from listing price, reviews, and your commission rate in Settings; they help prioritize inventory until
+              you plug in analytics.
             </p>
             <div className={styles.tableWrap}>
               <div className={`${styles.tableHead} ${styles.tableHeadProps}`}>
@@ -425,7 +472,7 @@ export default function Admin() {
                     <button
                       type="button"
                       className={styles.iconBtn}
-                      onClick={() => showToast('Editor: wire to CMS / API in production.')}
+                      onClick={() => showToast('Open your CMS or API-backed editor when connected.')}
                       title="Edit"
                     >
                       <Edit size={13} />
@@ -453,7 +500,7 @@ export default function Admin() {
                         <strong>{a.property}</strong>
                         <div className={styles.dimText}>
                           {a.owner} · {a.location} · {a.submitted}
-                          {a.kind === 'submission' ? ' · from list flow' : ' · internal intake'}
+                          {' · List a property'}
                         </div>
                       </div>
                       <button type="button" className="btn-outline" style={{ padding: '8px 16px', fontSize: '12px' }} onClick={() => setTab('Applications')}>
@@ -469,95 +516,346 @@ export default function Admin() {
 
         {tab === 'Users' && (
           <div>
-            <p className={styles.sectionIntro}>Directory sample + accounts that registered on this device ({registeredMemberCount()} emails in local storage).</p>
-            <div className={styles.tableWrap}>
-              <div className={styles.tableHeadUsers}>
-                <span>Name</span>
-                <span>Email</span>
-                <span>Role</span>
-                <span>Bookings</span>
-                <span>Joined</span>
-                <span>Status</span>
-                <span>Actions</span>
-              </div>
-              {mockUsers.map(u => (
-                <div key={u.id} className={styles.tableRowUsers}>
-                  <span className={styles.propName}>{u.name}</span>
-                  <span className={styles.dimText}>{u.email}</span>
-                  <span className={`${styles.roleBadge} ${styles[u.role]}`}>{u.role}</span>
-                  <span>{u.bookings}</span>
-                  <span className={styles.dimText}>{u.joined}</span>
-                  <span className={u.status === 'active' ? styles.activeTag : styles.suspendedTag}>{u.status}</span>
-                  <span className={styles.actionBtns}>
-                    <button type="button" className={styles.iconBtn} onClick={() => showToast(`Profile: ${u.name}`)} title="View">
-                      <Eye size={13} />
-                    </button>
-                    <button type="button" className={`${styles.iconBtn} ${styles.dangerBtn}`} onClick={() => showToast('Suspend / remove → connect backend.')} title="Remove">
-                      <Trash2 size={13} />
-                    </button>
-                  </span>
+            <p className={styles.sectionIntro}>
+              Everyone who has signed up on this device ({registeredUserRows.length} account
+              {registeredUserRows.length === 1 ? '' : 's'}). Guest booking counts exclude cancelled and refunded stays.
+            </p>
+            {registeredUserRows.length === 0 ? (
+              <p className={styles.empty}>No registered users yet. Sign up from the guest flow to see rows here.</p>
+            ) : (
+              <div className={styles.tableWrap}>
+                <div className={`${styles.tableHeadUsers} ${styles.tableHeadUsersWide}`}>
+                  <span>Name</span>
+                  <span>Email</span>
+                  <span>Role</span>
+                  <span>KYC</span>
+                  <span>Bookings</span>
+                  <span>Joined</span>
+                  <span>Status</span>
+                  <span>Actions</span>
                 </div>
-              ))}
-            </div>
+                {registeredUserRows.map(u => (
+                  <div key={u.id} className={`${styles.tableRowUsers} ${styles.tableRowUsersWide}`}>
+                    <span className={styles.propName}>{u.name}</span>
+                    <span className={styles.dimText}>{u.email}</span>
+                    <span className={`${styles.roleBadge} ${styles[u.role]}`}>{u.role}</span>
+                    <span>
+                      <select
+                        className="form-input"
+                        style={{ padding: '6px 8px', fontSize: '12px', minWidth: 100 }}
+                        value={u.kycTier}
+                        onChange={e => {
+                          const all = loadJson(USER_META_KEY, {})
+                          const prev = { ...(all[u.emailKey] || {}), ...(all[u.email] || {}) }
+                          all[u.emailKey] = { ...prev, kycTier: e.target.value }
+                          if (u.email !== u.emailKey) delete all[u.email]
+                          saveJson(USER_META_KEY, all)
+                          setUserDirVersion(x => x + 1)
+                          showToast('KYC tier updated.')
+                        }}
+                      >
+                        <option value="none">None</option>
+                        <option value="basic">Basic</option>
+                        <option value="verified">Verified</option>
+                      </select>
+                    </span>
+                    <span>{u.bookings}</span>
+                    <span className={styles.dimText}>{u.joined}</span>
+                    <span className={u.status === 'active' ? styles.activeTag : styles.suspendedTag}>{u.status}</span>
+                    <span className={styles.actionBtns}>
+                      <button
+                        type="button"
+                        className={styles.iconBtn}
+                        onClick={() => {
+                          const all = loadJson(USER_META_KEY, {})
+                          const prev = { ...(all[u.emailKey] || {}), ...(all[u.email] || {}) }
+                          all[u.emailKey] = { ...prev, suspended: !u.suspended }
+                          if (u.email !== u.emailKey) delete all[u.email]
+                          saveJson(USER_META_KEY, all)
+                          setUserDirVersion(x => x + 1)
+                          showToast(u.suspended ? 'User unsuspended.' : 'User suspended — sign-in blocked.')
+                        }}
+                        title="Suspend / unsuspend"
+                      >
+                        <Shield size={13} />
+                      </button>
+                      <button type="button" className={styles.iconBtn} onClick={() => showToast(`Profile: ${u.name}`)} title="View">
+                        <Eye size={13} />
+                      </button>
+                      <button
+                        type="button"
+                        className={`${styles.iconBtn} ${styles.dangerBtn}`}
+                        onClick={() => {
+                          if (!window.confirm(`Delete account ${u.email} from this directory?`)) return
+                          const all = loadJson(USER_META_KEY, {})
+                          delete all[u.emailKey]
+                          if (u.email !== u.emailKey) delete all[u.email]
+                          saveJson(USER_META_KEY, all)
+                          setUserDirVersion(x => x + 1)
+                          showToast('User removed from directory.')
+                        }}
+                        title="Remove"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
         {tab === 'Bookings' && (
           <div>
-            <p className={styles.sectionIntro}>
-              Confirmed stays stored in this browser ({bookings.length}). Older demo rows show if the ledger is empty.
-            </p>
-            <div className={styles.tableWrap}>
-              <div className={styles.tableHeadBookings}>
-                <span>Guest / Ref</span>
-                <span>Property</span>
-                <span>Check-in</span>
-                <span>Check-out</span>
-                <span>Total</span>
-                <span>Status</span>
-              </div>
-              {(bookings.length
-                ? bookings
-                : [
-                    {
-                      id: 'd1',
-                      property: 'The Cliff House',
-                      checkIn: '2024-03-14',
-                      checkOut: '2024-03-21',
-                      total: 679000,
-                      status: 'confirmed',
-                      reference: 'DEMO-1',
-                    },
-                    {
-                      id: 'd2',
-                      property: 'The Ghat Heritage House',
-                      checkIn: '2024-04-02',
-                      checkOut: '2024-04-06',
-                      total: 880000,
-                      status: 'confirmed',
-                      reference: 'DEMO-2',
-                    },
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center', marginBottom: 16 }}>
+              <p className={styles.sectionIntro} style={{ margin: 0, flex: 1 }}>
+                All guest checkouts recorded on this device ({bookings.length}).
+              </p>
+              <button
+                type="button"
+                className="btn-outline"
+                style={{ fontSize: '12px' }}
+                disabled={!bookings.length}
+                onClick={() => {
+                  const cols = [
+                    'reference',
+                    'guestEmail',
+                    'property',
+                    'checkIn',
+                    'checkOut',
+                    'total',
+                    'status',
+                    'settlementStatus',
                   ]
-              ).map(b => (
-                <div key={b.id} className={styles.tableRowBookings}>
-                  <span>{b.reference || '—'}</span>
-                  <span className={styles.dimText}>{b.property}</span>
-                  <span>{b.checkIn}</span>
-                  <span>{b.checkOut}</span>
-                  <span>₹{Number(b.total).toLocaleString('en-IN')}</span>
-                  <span className={styles.completedTag}>{b.status || 'confirmed'}</span>
-                </div>
-              ))}
+                  const lines = [cols.join(',')]
+                  bookings.forEach(b => {
+                    lines.push(cols.map(c => csvEscape(b[c])).join(','))
+                  })
+                  downloadCsv(`nammastays-bookings-${Date.now()}.csv`, lines)
+                  showToast('Bookings exported.')
+                }}
+              >
+                Export CSV
+              </button>
+              <button
+                type="button"
+                className="btn-outline"
+                style={{ fontSize: '12px' }}
+                disabled={!registeredUserRows.length}
+                onClick={() => {
+                  const cols = ['email', 'name', 'role', 'kycTier', 'suspended', 'bookings', 'joined']
+                  const lines = [cols.join(',')]
+                  registeredUserRows.forEach(u => {
+                    lines.push(
+                      cols
+                        .map(c =>
+                          csvEscape(
+                            c === 'suspended' ? (u.suspended ? 'yes' : 'no') : u[c]
+                          )
+                        )
+                        .join(',')
+                    )
+                  })
+                  downloadCsv(`nammastays-users-${Date.now()}.csv`, lines)
+                  showToast('Users exported.')
+                }}
+              >
+                Export users CSV
+              </button>
             </div>
+            {bookings.length === 0 ? (
+              <p className={styles.empty}>No bookings in the ledger. Complete a stay from the guest payment flow to see rows here.</p>
+            ) : (
+              <div className={styles.tableWrap}>
+                <div className={`${styles.tableHeadBookings} ${styles.tableHeadBookingsWide}`}>
+                  <span>Reference</span>
+                  <span>Guest</span>
+                  <span>Property</span>
+                  <span>Check-in</span>
+                  <span>Check-out</span>
+                  <span>Total</span>
+                  <span>Settlement</span>
+                  <span>Status</span>
+                  <span>Actions</span>
+                </div>
+                {bookings.map(b => (
+                  <div key={b.id} className={`${styles.tableRowBookings} ${styles.tableRowBookingsWide}`}>
+                    <span className={styles.mono}>{b.reference || '—'}</span>
+                    <span className={styles.dimText}>{b.guestEmail || '—'}</span>
+                    <span className={styles.dimText}>{b.property}</span>
+                    <span>{b.checkIn}</span>
+                    <span>{b.checkOut}</span>
+                    <span>₹{Number(b.total).toLocaleString('en-IN')}</span>
+                    <span className={styles.dimText}>{b.settlementStatus || '—'}</span>
+                    <span className={styles.completedTag}>{b.status || 'confirmed'}</span>
+                    <span className={styles.adminBookingActions}>
+                      {b.refundRequest?.status === 'pending' && b.status !== 'refunded' && (
+                        <button
+                          type="button"
+                          className={styles.inlineLinkish}
+                          onClick={() => {
+                            const refundId = `rfnd_${Date.now().toString(36)}`
+                            patchBooking(b.id, {
+                              status: 'refunded',
+                              refundedAt: new Date().toISOString(),
+                              refundAmount: b.total,
+                              refundRequest: { ...b.refundRequest, status: 'approved', approvedBy: 'platform' },
+                              paymentRefundId: refundId,
+                            })
+                            try {
+                              pushInAppNotification({
+                                title: 'Refund completed',
+                                body: `${b.property || 'Stay'} · ₹${Number(b.total || 0).toLocaleString('en-IN')} returned to your payment method.`,
+                                href: '/bookings',
+                                recipientEmail: b.guestEmail,
+                              })
+                              window.dispatchEvent(new Event('ns-notifications'))
+                            } catch {
+                              /* ignore */
+                            }
+                            showToast('Refund approved — booking marked refunded.')
+                          }}
+                        >
+                          Approve refund
+                        </button>
+                      )}
+                      {b.refundRequest?.status !== 'pending' &&
+                      (b.settlementStatus || 'pending_settlement') !== 'paid' &&
+                      b.status !== 'refunded' ? (
+                        <button
+                          type="button"
+                          className={styles.inlineLinkish}
+                          onClick={() => {
+                            patchBooking(b.id, { settlementStatus: 'paid' })
+                            showToast(`Marked ${b.reference || 'booking'} as paid out to host.`)
+                          }}
+                        >
+                          Mark paid
+                        </button>
+                      ) : b.refundRequest?.status === 'pending' ? null : (
+                        <span className={styles.dimText}>—</span>
+                      )}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {tab === 'Moderation' && (
+          <div>
+            <p className={styles.sectionIntro}>
+              Guest reviews enter as <strong>pending</strong> until approved. Only approved posts affect public ratings.
+            </p>
+            {pendingReviews.length === 0 ? (
+              <p className={styles.empty}>Nothing in the queue.</p>
+            ) : (
+              <div className={styles.tableWrap}>
+                {pendingReviews.map(r => (
+                  <div key={r.id} className={styles.pipelineRow}>
+                    <div>
+                      <strong>Property {r.propertyId}</strong> · booking {r.bookingId}
+                      <div className={styles.dimText}>{r.guestEmail}</div>
+                      <div style={{ marginTop: 8 }}>{'★'.repeat(r.rating)} — {r.comment || 'No comment'}</div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button
+                        type="button"
+                        className="btn-gold"
+                        style={{ padding: '8px 16px', fontSize: '12px' }}
+                        onClick={() => {
+                          moderatePropertyReview(r.id, 'approved')
+                          showToast('Review approved.')
+                        }}
+                      >
+                        Approve
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-ghost"
+                        style={{ padding: '8px 16px', fontSize: '12px', borderColor: 'var(--danger)', color: 'var(--danger)' }}
+                        onClick={() => {
+                          moderatePropertyReview(r.id, 'rejected')
+                          showToast('Review rejected.')
+                        }}
+                      >
+                        Reject
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {tab === 'Disputes' && (
+          <div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center', marginBottom: 16 }}>
+              <p className={styles.sectionIntro} style={{ margin: 0, flex: 1 }}>
+                Ledger of guest / host disputes opened from My account.
+              </p>
+              <button
+                type="button"
+                className="btn-outline"
+                style={{ fontSize: '12px' }}
+                disabled={!disputeRows.length}
+                onClick={() => {
+                  const cols = ['id', 'createdAt', 'status', 'bookingId', 'openedByEmail', 'reason']
+                  const lines = [cols.join(',')]
+                  disputeRows.forEach(d => {
+                    lines.push(cols.map(c => csvEscape(d[c])).join(','))
+                  })
+                  downloadCsv(`nammastays-disputes-${Date.now()}.csv`, lines)
+                  showToast('Disputes exported.')
+                }}
+              >
+                Export disputes CSV
+              </button>
+            </div>
+            {disputeRows.length === 0 ? (
+              <p className={styles.empty}>No open disputes.</p>
+            ) : (
+              disputeRows.map(d => (
+                <div key={d.id} className={styles.pipelineRow}>
+                  <div>
+                    <strong>Booking {d.bookingId}</strong> · {d.openedByEmail}
+                    <div className={styles.dimText}>{new Date(d.createdAt).toLocaleString('en-IN')}</div>
+                    <p style={{ marginTop: 8 }}>{d.reason}</p>
+                  </div>
+                  {d.status === 'open' ? (
+                    <button
+                      type="button"
+                      className="btn-outline"
+                      style={{ padding: '8px 16px', fontSize: '12px' }}
+                      onClick={() => {
+                        patchDispute(d.id, { status: 'resolved', resolvedAt: new Date().toISOString() })
+                        setDisputeRows(loadDisputes())
+                        showToast('Marked resolved.')
+                      }}
+                    >
+                      Resolve
+                    </button>
+                  ) : (
+                    <span className={styles.dimText}>Resolved</span>
+                  )}
+                </div>
+              ))
+            )}
           </div>
         )}
 
         {tab === 'Applications' && (
           <div>
             <p className={styles.sectionIntro}>
-              <strong>Onboarding queue</strong> — internal applications plus real submissions from the public <strong>List a property</strong> flow (same
-              email as login). Approve/reject updates host records and this list.
+              <strong>Onboarding</strong> — submissions from <strong>List a property</strong>, matched to the host&apos;s login email.
+              Approve or reject to update their listing status.
             </p>
+            {mergedApplications.length === 0 && (
+              <p className={styles.empty}>No applications yet. A host can submit from List a property while logged in.</p>
+            )}
             {mergedApplications.map(a => {
               const d = a.submissionDetail
               const expanded = openApplicationId === a.id
@@ -737,7 +1035,7 @@ export default function Admin() {
                   checked={settings.maintenanceMode}
                   onChange={e => setSetting('maintenanceMode', e.target.checked)}
                 />
-                <span>Maintenance banner (demo — show toast on home in a future pass)</span>
+                <span>Maintenance banner on the homepage (guests see a notice; booking still works)</span>
               </label>
               <button type="button" className="btn-gold" style={{ width: 'fit-content' }} onClick={savePlatformSettings}>
                 Save settings{settingsDirty ? ' *' : ''}

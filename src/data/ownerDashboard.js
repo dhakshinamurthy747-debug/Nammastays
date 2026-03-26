@@ -1,63 +1,7 @@
 /**
- * Demo reservations for the owner portal (anchored to “today” so the calendar always shows relevant nights).
- * checkOut is exclusive (guest departs that morning).
+ * Owner portal calendar helpers (date math, night occupancy).
+ * checkOut is exclusive (guest departs that calendar morning).
  */
-export function getDemoOwnerBookings() {
-  const n = new Date()
-  const y = n.getFullYear()
-  const m = n.getMonth()
-  const o = (year, month, day) => toYMD(new Date(year, month, day))
-  return [
-    {
-      id: 'b1',
-      propertyId: 101,
-      propertyName: 'The Cliff House',
-      guest: 'Charlotte M.',
-      email: 'charlotte@example.com',
-      checkIn: o(y, m - 1, 10),
-      checkOut: o(y, m - 1, 16),
-      nights: 6,
-      total: 582000,
-      status: 'completed',
-    },
-    {
-      id: 'b2',
-      propertyId: 101,
-      propertyName: 'The Cliff House',
-      guest: 'James R.',
-      email: 'james@example.com',
-      checkIn: o(y, m, 14),
-      checkOut: o(y, m, 21),
-      nights: 7,
-      total: 679000,
-      status: 'upcoming',
-    },
-    {
-      id: 'b3',
-      propertyId: 101,
-      propertyName: 'The Cliff House',
-      guest: 'Priya S.',
-      email: 'priya@example.com',
-      checkIn: o(y, m + 1, 2),
-      checkOut: o(y, m + 1, 6),
-      nights: 4,
-      total: 388000,
-      status: 'upcoming',
-    },
-    {
-      id: 'b4',
-      propertyId: 102,
-      propertyName: 'Desert Fortress',
-      guest: 'Alex T.',
-      email: 'alex@example.com',
-      checkIn: o(y, m + 2, 1),
-      checkOut: o(y, m + 2, 5),
-      nights: 4,
-      total: 420000,
-      status: 'upcoming',
-    },
-  ]
-}
 
 export function toYMD(d) {
   const y = d.getFullYear()

@@ -11,8 +11,8 @@ export default function Cookies() {
         <div className="section-label">Legal</div>
         <h1 className={styles.title}>Cookies &amp; local storage</h1>
         <p className={styles.sub}>
-          Transparency for this demo app. No tracking cookies are set by NammaStays sample code; your session and data use the
-          browser&apos;s storage only.
+          How NammaStays uses browser storage. We do not load third-party advertising or analytics cookies in this build; your
+          session and app data are kept in the browser unless you connect a backend.
         </p>
       </header>
 
@@ -24,18 +24,18 @@ export default function Cookies() {
               <strong>Session:</strong> signed-in user (email, name, role) — key similar to <code>ns_auth_session</code>.
             </li>
             <li>
-              <strong>Bookings:</strong> confirmed stays after the simulated payment step.
+              <strong>Bookings:</strong> stays after checkout confirmation.
             </li>
             <li>
               <strong>Host submissions:</strong> list-property applications and admin decisions.
             </li>
             <li>
-              <strong>Admin settings:</strong> demo platform toggles (commission, etc.).
+              <strong>Admin settings:</strong> platform rules such as commission and maintenance mode.
             </li>
           </ul>
           <p className={styles.p}>
-            Clearing site data or using a private window resets the demo. A production site would publish a full cookie policy
-            and consent tools.
+            Users can clear site data in the browser to remove local copies. With a hosted backend, publish and honour your
+            full cookie notice and consent where required.
           </p>
         </section>
 

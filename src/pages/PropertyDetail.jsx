@@ -1,7 +1,14 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import { Link, useParams, useNavigate, useLocation } from 'react-router-dom'
-import { MapPin, Star, Users, BedDouble, Bath, Maximize, Check, ArrowLeft, ArrowRight, Calendar } from 'lucide-react'
+import { MapPin, Star, Users, BedDouble, Bath, Maximize, Check, ArrowLeft, ArrowRight, Calendar, FileText } from 'lucide-react'
 import { useApp } from '../context/AppContext'
+import { computeGuestBookingBreakdown, sumGuestLifetimeSpend } from '../utils/guestPricing'
+import { getPlatformCommissionRate } from '../utils/platformSettings'
+import {
+  buildNightlyPricesForStay,
+  validateStayAvailability,
+} from '../utils/hostCatalogMerge'
+import { findActivePromo } from '../utils/promoResolve'
 import Footer from '../components/Footer'
 import styles from './PropertyDetail.module.css'
 
@@ -9,7 +16,8 @@ export default function PropertyDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
   const location = useLocation()
-  const { user, showToast, mergedCatalogProperties } = useApp()
+  const { user, showToast, mergedCatalogProperties, bookings, hostPromotions } = useApp()
+  const commissionRate = getPlatformCommissionRate()
   const pid = Number(id)
   const property = mergedCatalogProperties.find(p => p.id === pid)
   const ratingHero =
@@ -28,6 +36,8 @@ export default function PropertyDetail() {
   const [checkIn, setCheckIn] = useState('')
   const [checkOut, setCheckOut] = useState('')
   const [guests, setGuests] = useState(2)
+  const [promoInput, setPromoInput] = useState('')
+  const [promoApplied, setPromoApplied] = useState(null)
 
   useEffect(() => {
     const draft = location.state?.bookingDraft
@@ -37,6 +47,33 @@ export default function PropertyDetail() {
     if (draft.guests) setGuests(Number(draft.guests))
     navigate(location.pathname, { replace: true, state: {} })
   }, [property, location.pathname, location.state, navigate])
+
+  const nights = checkIn && checkOut
+    ? Math.max(0, Math.round((new Date(checkOut) - new Date(checkIn)) / 86400000))
+    : 0
+
+  const lifetimeSpendBefore = useMemo(
+    () => (user ? sumGuestLifetimeSpend(bookings, user.email) : 0),
+    [bookings, user]
+  )
+
+  const stayQuote = useMemo(() => {
+    if (!property || nights <= 0 || !checkIn || !checkOut) return null
+    const { nightlyPrices, stayMinNights } = buildNightlyPricesForStay(property, checkIn, checkOut)
+    const pricing = computeGuestBookingBreakdown({
+      nightlyPrices,
+      lifetimeSpendBefore,
+      platformCommissionRate: commissionRate,
+      promoDiscountPct: promoApplied?.discountPct || 0,
+    })
+    return { pricing, stayMinNights, nightlyPrices }
+  }, [property, nights, checkIn, checkOut, lifetimeSpendBefore, commissionRate, promoApplied])
+
+  const pricing = stayQuote?.pricing ?? null
+  const stayMinNights = stayQuote?.stayMinNights ?? property?.minStayNights ?? 2
+  const nightlyPricesForStay = stayQuote?.nightlyPrices ?? []
+  const uniformNightly =
+    nightlyPricesForStay.length > 0 && nightlyPricesForStay.every(x => x === nightlyPricesForStay[0])
 
   if (!property)
     return (
@@ -59,14 +96,18 @@ export default function PropertyDetail() {
       </div>
     )
 
-  const nights = checkIn && checkOut
-    ? Math.max(0, Math.round((new Date(checkOut) - new Date(checkIn)) / 86400000))
-    : 0
-  const total = nights * property.price
-
   const handleBook = () => {
     if (!checkIn || !checkOut) { showToast('Please select your dates.'); return }
     if (nights < 1) { showToast('Check-out must be after check-in.'); return }
+    if (nights < stayMinNights) {
+      showToast(`Minimum stay is ${stayMinNights} night${stayMinNights === 1 ? '' : 's'} for these dates.`)
+      return
+    }
+    const avail = validateStayAvailability(property, checkIn, checkOut, bookings)
+    if (!avail.ok) {
+      showToast(avail.message)
+      return
+    }
     if (!user) {
       showToast('Sign in to continue to payment.')
       navigate('/login', {
@@ -77,13 +118,38 @@ export default function PropertyDetail() {
       })
       return
     }
-    navigate('/payment', { state: { property, checkIn, checkOut, guests, nights, total } })
+    if (!pricing) {
+      showToast('Unable to calculate total. Please re-select dates.')
+      return
+    }
+    navigate('/payment', {
+      state: {
+        property,
+        checkIn,
+        checkOut,
+        guests,
+        nights,
+        total: pricing.grandTotal,
+        pricing,
+        promoCode: promoApplied?.code || '',
+        promoDiscountPct: promoApplied?.discountPct || 0,
+      },
+    })
   }
 
   return (
     <div className={styles.page}>
       {/* Hero */}
-      <div className={styles.hero} style={{ background: property.gradient }}>
+      <div className={styles.hero}>
+        {property.image ? (
+          <div
+            className={styles.heroPhoto}
+            style={{ backgroundImage: `url(${property.image})` }}
+            aria-hidden
+          />
+        ) : (
+          <div className={styles.heroFallback} style={{ background: property.gradient }} aria-hidden />
+        )}
         <div className={styles.heroOverlay} />
         <div className={styles.heroContent}>
           <button type="button" className={styles.back} onClick={() => navigate('/properties')}>
@@ -139,6 +205,41 @@ export default function PropertyDetail() {
               ))}
             </div>
           </div>
+
+          {(property.cancellationPolicyText ||
+            property.houseRulesText ||
+            (Array.isArray(property.policyAttachments) && property.policyAttachments.length > 0)) && (
+            <div className={styles.section}>
+              <div className="section-label">Policies & documents</div>
+              <div className="gold-line" style={{ margin: '14px 0 20px' }} />
+              {property.cancellationPolicyText && (
+                <div className={styles.policyBlock}>
+                  <div className={styles.policyTitle}>Cancellation</div>
+                  <p className={styles.policyText}>{property.cancellationPolicyText}</p>
+                </div>
+              )}
+              {property.houseRulesText && (
+                <div className={styles.policyBlock}>
+                  <div className={styles.policyTitle}>House rules</div>
+                  <p className={styles.policyText}>{property.houseRulesText}</p>
+                </div>
+              )}
+              {Array.isArray(property.policyAttachments) && property.policyAttachments.length > 0 && (
+                <div className={styles.policyBlock}>
+                  <div className={styles.policyTitle}>Attachments</div>
+                  <ul className={styles.policyLinks}>
+                    {property.policyAttachments.map((a, i) => (
+                      <li key={i}>
+                        <a href={a.url} target="_blank" rel="noopener noreferrer" className={styles.policyLink}>
+                          <FileText size={14} aria-hidden /> {a.label || 'Download'}
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Owner */}
           <div className={styles.section}>
@@ -212,24 +313,82 @@ export default function PropertyDetail() {
               </select>
             </div>
 
-            {nights > 0 && (
+            <div className={styles.guestField}>
+              <label className={styles.dateLabel}>Promo code (optional)</label>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <input
+                  type="text"
+                  className={styles.dateInput}
+                  value={promoInput}
+                  onChange={e => setPromoInput(e.target.value.toUpperCase())}
+                  placeholder="e.g. EXT12"
+                  autoComplete="off"
+                />
+                <button
+                  type="button"
+                  className="btn-outline"
+                  style={{ padding: '10px 14px', fontSize: '11px', flexShrink: 0, whiteSpace: 'nowrap' }}
+                  onClick={() => {
+                    const hit = findActivePromo(hostPromotions, property.id, promoInput)
+                    if (!hit) {
+                      setPromoApplied(null)
+                      showToast('Code not valid for this property or inactive.')
+                      return
+                    }
+                    setPromoApplied({ code: hit.code, discountPct: hit.discountPct })
+                    showToast(`${hit.discountPct}% off applied to room total.`)
+                  }}
+                >
+                  Apply
+                </button>
+              </div>
+              {promoApplied && (
+                <p className={styles.breakdownHint} style={{ marginTop: 8 }}>
+                  {promoApplied.discountPct}% off room · code {promoApplied.code}
+                  <button
+                    type="button"
+                    className="btn-ghost"
+                    style={{ marginLeft: 8, padding: '4px 8px', fontSize: '11px' }}
+                    onClick={() => { setPromoApplied(null); setPromoInput('') }}
+                  >
+                    Remove
+                  </button>
+                </p>
+              )}
+            </div>
+
+            {nights > 0 && pricing && (
               <div className={styles.breakdown}>
                 <div className={styles.breakdownRow}>
-                  <span>₹{property.price.toLocaleString('en-IN')} × {nights} nights</span>
-                  <span>₹{(property.price * nights).toLocaleString('en-IN')}</span>
+                  <span>
+                    {uniformNightly
+                      ? `₹${(nightlyPricesForStay[0] ?? property.price).toLocaleString('en-IN')} × ${nights} nights`
+                      : `Room total (${nights} nights · mixed rates)`}
+                  </span>
+                  <span>₹{pricing.roomSubtotal.toLocaleString('en-IN')}</span>
+                </div>
+                {!uniformNightly && nightlyPricesForStay.length > 0 && (
+                  <p className={styles.breakdownHint}>Nightly rate follows the host&apos;s calendar and bulk rules.</p>
+                )}
+                {pricing.promoDiscountAmount > 0 && (
+                  <div className={styles.breakdownRow}>
+                    <span>Promo · {promoApplied?.code} ({pricing.promoDiscountPct}% off room)</span>
+                    <span>−₹{pricing.promoDiscountAmount.toLocaleString('en-IN')}</span>
+                  </div>
+                )}
+                <div className={styles.breakdownRow}>
+                  <span>GST ({pricing.gstPercentLabel}%)</span>
+                  <span>₹{pricing.gstAmount.toLocaleString('en-IN')}</span>
                 </div>
                 <div className={styles.breakdownRow}>
-                  <span>NammaStays service</span>
-                  <span>Included</span>
+                  <span>Service fee ({pricing.serviceFeePercentLabel}%)</span>
+                  <span>₹{pricing.serviceFeeAmount.toLocaleString('en-IN')}</span>
                 </div>
-                <div className={styles.breakdownRow}>
-                  <span>Concierge</span>
-                  <span>Included</span>
-                </div>
+                <p className={styles.breakdownHint}>{pricing.serviceFeeTierNote}</p>
                 <div className={styles.divider} />
                 <div className={`${styles.breakdownRow} ${styles.totalRow}`}>
                   <span>Total</span>
-                  <span>₹{total.toLocaleString('en-IN')}</span>
+                  <span>₹{pricing.grandTotal.toLocaleString('en-IN')}</span>
                 </div>
               </div>
             )}
@@ -245,7 +404,8 @@ export default function PropertyDetail() {
             </button>
 
             <p className={styles.note}>
-              <Calendar size={11} /> Minimum nights and house rules are set by the host · Cancellation at checkout
+              <Calendar size={11} /> Min {stayMinNights} night{stayMinNights === 1 ? '' : 's'} for selected dates ·
+              Cancellation at checkout
             </p>
           </div>
         </div>

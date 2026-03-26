@@ -19,6 +19,9 @@ export default function NotFound() {
       <Link to="/help" className={styles.link}>
         Help centre
       </Link>
+      <Link to="/sitemap" className={styles.link}>
+        Sitemap
+      </Link>
     </div>
   )
 }

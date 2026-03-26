@@ -186,7 +186,50 @@
 }
 .tableRowUsers { grid-template-columns: 1.5fr 2fr 0.7fr 0.7fr 1fr 0.8fr 0.7fr; }
 .tableRowBookings { grid-template-columns: 1.5fr 2fr 1fr 1fr 1fr 1fr; }
+.tableHeadBookingsWide,
+.tableRowBookingsWide {
+  grid-template-columns: 1.1fr 1.3fr 1.4fr 0.85fr 0.85fr 0.9fr 1fr 0.75fr 0.95fr;
+  min-width: 1100px;
+}
+.tableHeadUsersWide,
+.tableRowUsersWide {
+  grid-template-columns: 1.2fr 1.8fr 0.65fr 0.95fr 0.55fr 0.85fr 0.7fr 1fr;
+  min-width: 1020px;
+}
+.adminBookingActions {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+}
 .tableRow:hover, .tableRowUsers:hover, .tableRowBookings:hover { background: var(--cream2); }
+
+.modeledBadge {
+  display: inline-block;
+  font-size: 9px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  padding: 4px 10px;
+  margin-right: 8px;
+  border-radius: 6px;
+  background: rgba(201, 169, 110, 0.22);
+  color: var(--sage);
+  font-weight: 700;
+  vertical-align: middle;
+}
+
+.inlineLinkish {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 11px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--sage);
+  cursor: pointer;
+  text-decoration: underline;
+  font-family: var(--font-sans);
+}
+.inlineLinkish:hover {
+  color: var(--ink);
+}
 
 .propName { color: var(--ink); font-weight: 400; }
 .dimText { color: var(--body); }

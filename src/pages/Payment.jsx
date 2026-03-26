@@ -1,14 +1,26 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { Lock, CreditCard, Check, ArrowLeft, Star, MapPin, Shield, Calendar } from 'lucide-react'
+import { Lock, CreditCard, Check, ArrowLeft, Star, MapPin, Shield, Calendar, FileText } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { STORAGE_KEYS } from '../utils/constants'
+import { computeGuestBookingBreakdown, sumGuestLifetimeSpend } from '../utils/guestPricing'
+import { getPlatformCommissionRate } from '../utils/platformSettings'
+import { buildNightlyPricesForStay, validateStayAvailability } from '../utils/hostCatalogMerge'
+import { findActivePromo } from '../utils/promoResolve'
+import {
+  isRazorpayConfigured,
+  getRazorpayKeyId,
+  getCreateOrderUrl,
+  loadRazorpayScript,
+  rupeesToPaise,
+} from '../utils/razorpayClient'
+import { buildBookingInvoiceHtml, downloadInvoiceHtml } from '../utils/bookingInvoice'
 import styles from './Payment.module.css'
 
 export default function Payment() {
   const location = useLocation()
   const navigate = useNavigate()
-  const { addBooking, showToast, user } = useApp()
+  const { addBooking, showToast, user, bookings, mergedCatalogProperties, hostPromotions } = useApp()
 
   const [bookingState, setBookingState] = useState(null)
   const [step, setStep] = useState(1) // 1: details, 2: confirm, 3: success
@@ -21,6 +33,13 @@ export default function Payment() {
   const [loading, setLoading] = useState(false)
   const [errors, setErrors] = useState({})
   const [stay, setStay] = useState({ checkIn: '', checkOut: '', guests: 2 })
+  const [razorpayReceipt, setRazorpayReceipt] = useState(null)
+  const [promoCodeInput, setPromoCodeInput] = useState('')
+  const [promoApplied, setPromoApplied] = useState(null)
+  const [successBookingSnapshot, setSuccessBookingSnapshot] = useState(null)
+
+  const razorpayEnabled = isRazorpayConfigured()
+  const razorpayKeyId = getRazorpayKeyId()
 
   useEffect(() => {
     if (location.state?.property?.id) {
@@ -78,7 +97,26 @@ export default function Payment() {
             )
           )
         : 0
-    const t = n * bookingState.property.price
+    const life = user ? sumGuestLifetimeSpend(bookings, user.email) : 0
+    const resProp =
+      mergedCatalogProperties.find(p => p.id === bookingState.property.id) || bookingState.property
+    const cr = getPlatformCommissionRate()
+    const promoPct = promoApplied?.discountPct || 0
+    const p =
+      n < 1 || !stay.checkIn || !stay.checkOut
+        ? computeGuestBookingBreakdown({
+            nightlyPrice: resProp.price,
+            nights: 0,
+            lifetimeSpendBefore: life,
+            platformCommissionRate: cr,
+            promoDiscountPct: promoPct,
+          })
+        : computeGuestBookingBreakdown({
+            nightlyPrices: buildNightlyPricesForStay(resProp, stay.checkIn, stay.checkOut).nightlyPrices,
+            lifetimeSpendBefore: life,
+            platformCommissionRate: cr,
+            promoDiscountPct: promoPct,
+          })
     try {
       sessionStorage.setItem(
         STORAGE_KEYS.PAYMENT_RESUME,
@@ -88,13 +126,95 @@ export default function Payment() {
           checkOut: stay.checkOut,
           guests: stay.guests,
           nights: n,
-          total: t,
+          total: p.grandTotal,
+          pricing: p,
+          promoCode: promoApplied?.code || '',
+          promoDiscountPct: promoApplied?.discountPct || 0,
         })
       )
     } catch {
       /* ignore */
     }
-  }, [bookingState, stay])
+  }, [bookingState, stay, user, bookings, mergedCatalogProperties, promoApplied])
+
+  useEffect(() => {
+    if (!bookingState?.property?.id) return
+    const c = String(bookingState.promoCode || '').trim()
+    const pct = Number(bookingState.promoDiscountPct) || 0
+    setPromoCodeInput(c)
+    if (c && pct) {
+      const hit = findActivePromo(hostPromotions, bookingState.property.id, c)
+      setPromoApplied(hit && hit.discountPct === pct ? hit : null)
+    } else {
+      setPromoApplied(null)
+    }
+  }, [bookingState?.property?.id, bookingState?.promoCode, bookingState?.promoDiscountPct, hostPromotions])
+
+  const rawProperty = bookingState?.property
+  const property = useMemo(
+    () =>
+      rawProperty?.id
+        ? mergedCatalogProperties.find(p => p.id === rawProperty.id) || rawProperty
+        : rawProperty ?? null,
+    [mergedCatalogProperties, rawProperty]
+  )
+
+  const nights =
+    stay.checkIn && stay.checkOut
+      ? Math.max(
+          0,
+          Math.round(
+            (new Date(`${stay.checkOut}T12:00:00`) - new Date(`${stay.checkIn}T12:00:00`)) / 86400000
+          )
+        )
+      : 0
+
+  const lifetimeSpendBefore = useMemo(
+    () => sumGuestLifetimeSpend(bookings, user?.email),
+    [bookings, user?.email]
+  )
+
+  const commissionRate = getPlatformCommissionRate()
+
+  const promoDiscountPct = promoApplied?.discountPct || 0
+
+  const pricing = useMemo(() => {
+    if (!property) {
+      return computeGuestBookingBreakdown({
+        nightlyPrice: 0,
+        nights: 0,
+        lifetimeSpendBefore,
+        platformCommissionRate: commissionRate,
+        promoDiscountPct,
+      })
+    }
+    if (!stay.checkIn || !stay.checkOut || nights < 1) {
+      return computeGuestBookingBreakdown({
+        nightlyPrice: property.price,
+        nights: 0,
+        lifetimeSpendBefore,
+        platformCommissionRate: commissionRate,
+        promoDiscountPct,
+      })
+    }
+    const { nightlyPrices } = buildNightlyPricesForStay(property, stay.checkIn, stay.checkOut)
+    return computeGuestBookingBreakdown({
+      nightlyPrices,
+      lifetimeSpendBefore,
+      platformCommissionRate: commissionRate,
+      promoDiscountPct,
+    })
+  }, [
+    property,
+    stay.checkIn,
+    stay.checkOut,
+    nights,
+    lifetimeSpendBefore,
+    commissionRate,
+    promoDiscountPct,
+  ])
+
+  const total = pricing.grandTotal
 
   if (!bookingState) {
     return (
@@ -113,18 +233,6 @@ export default function Payment() {
       </div>
     )
   }
-
-  const { property } = bookingState
-  const nights =
-    stay.checkIn && stay.checkOut
-      ? Math.max(
-          0,
-          Math.round(
-            (new Date(`${stay.checkOut}T12:00:00`) - new Date(`${stay.checkIn}T12:00:00`)) / 86400000
-          )
-        )
-      : 0
-  const total = nights * property.price
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
   const todayYmd = new Date().toISOString().split('T')[0]
@@ -162,19 +270,20 @@ export default function Payment() {
       showToast(`This property welcomes up to ${property.guests} guests.`)
       return false
     }
+    const { stayMinNights } = buildNightlyPricesForStay(property, stay.checkIn, stay.checkOut)
+    if (nights < stayMinNights) {
+      showToast(`Minimum stay is ${stayMinNights} night${stayMinNights === 1 ? '' : 's'} for these dates.`)
+      return false
+    }
+    const avail = validateStayAvailability(property, stay.checkIn, stay.checkOut, bookings)
+    if (!avail.ok) {
+      showToast(avail.message)
+      return false
+    }
     return true
   }
 
-  const handleContinue = () => {
-    if (!validateStay()) return
-    if (!validate()) return
-    setStep(2)
-  }
-
-  const handleConfirm = async () => {
-    if (!validateStay()) return
-    setLoading(true)
-    await new Promise(r => setTimeout(r, 2000))
+  const finalizeBooking = rzpResponse => {
     const reference = `NS-${Date.now().toString(36).toUpperCase().slice(-10)}`
     addBooking({
       propertyId: property.id,
@@ -182,15 +291,54 @@ export default function Payment() {
       location: property.location,
       type: property.type,
       gradient: property.gradient,
+      hostOwnerEmail: property.hostOwnerEmail || null,
       checkIn: stay.checkIn,
       checkOut: stay.checkOut,
       guests: stay.guests,
       total,
       nights,
+      guestEmail: user.email,
+      roomSubtotal: pricing.roomSubtotal,
+      gstAmount: pricing.gstAmount,
+      gstPercentLabel: pricing.gstPercentLabel,
+      serviceFeeAmount: pricing.serviceFeeAmount,
+      serviceFeePercentLabel: pricing.serviceFeePercentLabel,
+      hostCommission: pricing.hostCommissionAmount,
+      hostNetOnRoom: pricing.hostNetOnRoom,
+      hostPayoutAmount: pricing.hostNetOnRoom,
+      platformFeeAmount: pricing.hostCommissionAmount,
+      platformCommissionRate: pricing.platformCommissionRate,
+      nightlyPrices: pricing.nightlyPrices,
+      roomSubtotalBeforePromo: pricing.roomSubtotalBeforePromo,
+      promoDiscountAmount: pricing.promoDiscountAmount,
+      promoCode: promoApplied?.code || '',
+      promoDiscountPct: promoApplied?.discountPct || 0,
+      settlementStatus: 'pending_settlement',
       specialRequests: form.specialRequests || '',
       reference,
+      razorpayPaymentId: rzpResponse?.razorpay_payment_id || '',
+      razorpayOrderId: rzpResponse?.razorpay_order_id || '',
+    })
+    setSuccessBookingSnapshot({
+      reference,
+      guestEmail: user.email,
+      property: property.name,
+      location: property.location,
+      checkIn: stay.checkIn,
+      checkOut: stay.checkOut,
+      nights,
+      guests: stay.guests,
+      total,
+      roomSubtotal: pricing.roomSubtotal,
+      gstAmount: pricing.gstAmount,
+      gstPercentLabel: pricing.gstPercentLabel,
+      serviceFeeAmount: pricing.serviceFeeAmount,
+      serviceFeePercentLabel: pricing.serviceFeePercentLabel,
+      status: 'confirmed',
+      razorpayPaymentId: rzpResponse?.razorpay_payment_id || '',
     })
     setConfirmationRef(reference)
+    setRazorpayReceipt(rzpResponse || null)
     try {
       sessionStorage.removeItem(STORAGE_KEYS.PAYMENT_RESUME)
     } catch {
@@ -198,6 +346,91 @@ export default function Payment() {
     }
     setLoading(false)
     setStep(3)
+  }
+
+  const handleContinue = () => {
+    if (!validateStay()) return
+    if (!razorpayEnabled && !validate()) return
+    setStep(2)
+  }
+
+  const openRazorpayCheckout = async () => {
+    if (!validateStay()) return
+    setLoading(true)
+    setRazorpayReceipt(null)
+    try {
+      await loadRazorpayScript()
+      const amountPaise = rupeesToPaise(total)
+      const res = await fetch(getCreateOrderUrl(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          amount: amountPaise,
+          currency: 'INR',
+          receipt: `ns_${property.id}_${Date.now()}`.slice(0, 40),
+          notes: {
+            propertyId: String(property.id),
+            nights: String(nights),
+            guestEmail: String(user.email || ''),
+          },
+        }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        showToast(data.error || 'Could not start Razorpay checkout. Check API keys and /api route.')
+        setLoading(false)
+        return
+      }
+      const prefillEmail =
+        user.email && !String(user.email).endsWith('@guest.nammastays.local') ? user.email : ''
+      const contactDigits = String(user.phone || '').replace(/\D/g, '')
+      const options = {
+        key: razorpayKeyId,
+        amount: data.amount,
+        currency: data.currency || 'INR',
+        order_id: data.id,
+        name: 'NammaStays',
+        description: `${property.name} · ${nights} night(s)`,
+        image: `${window.location.origin}/favicon.svg`,
+        handler(response) {
+          finalizeBooking(response)
+        },
+        prefill: {
+          name: user.name || '',
+          email: prefillEmail,
+          contact: contactDigits.length >= 10 ? contactDigits.slice(-10) : undefined,
+        },
+        theme: { color: '#6b1d2e' },
+        modal: {
+          ondismiss: () => setLoading(false),
+        },
+      }
+      const Rzp = window.Razorpay
+      if (typeof Rzp !== 'function') {
+        throw new Error('Razorpay SDK missing')
+      }
+      const rzp = new Rzp(options)
+      rzp.on('payment.failed', e => {
+        showToast(e.error?.description || 'Payment failed.')
+        setLoading(false)
+      })
+      rzp.open()
+    } catch (e) {
+      console.error(e)
+      showToast('Could not open Razorpay. Check VITE_RAZORPAY_KEY_ID, deploy the create-order API route, or complete pay without Razorpay in settings.')
+      setLoading(false)
+    }
+  }
+
+  const handleConfirm = async () => {
+    if (!validateStay()) return
+    if (razorpayEnabled) {
+      await openRazorpayCheckout()
+      return
+    }
+    setLoading(true)
+    await new Promise(r => setTimeout(r, 1200))
+    finalizeBooking(null)
   }
 
   if (step === 3) return (
@@ -214,6 +447,11 @@ export default function Payment() {
             Reference: <strong>{confirmationRef}</strong>
           </p>
         )}
+        {razorpayReceipt?.razorpay_payment_id && (
+          <p className={styles.referenceLine}>
+            Razorpay payment id: <strong>{razorpayReceipt.razorpay_payment_id}</strong>
+          </p>
+        )}
         <div className={styles.successCard}>
           <div className={styles.successProp}>{property.name}</div>
           <div className={styles.successLoc}><MapPin size={11} />{property.location}</div>
@@ -223,10 +461,32 @@ export default function Payment() {
             <span>{stay.checkOut}</span>
           </div>
           <div className={styles.successTotal}>
-            ₹{total.toLocaleString('en-IN')} · {nights} nights · {stay.guests} guests
+            ₹{total.toLocaleString('en-IN')} paid · {nights} nights · {stay.guests} guests
+          </div>
+          <div className={styles.successPricingMini}>
+            <span>Room ₹{pricing.roomSubtotal.toLocaleString('en-IN')}</span>
+            <span>GST ({pricing.gstPercentLabel}%) ₹{pricing.gstAmount.toLocaleString('en-IN')}</span>
+            <span>
+              Service fee ({pricing.serviceFeePercentLabel}%) ₹{pricing.serviceFeeAmount.toLocaleString('en-IN')}
+            </span>
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 16, marginTop: 32, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 16, marginTop: 32, flexWrap: 'wrap', alignItems: 'center' }}>
+          {successBookingSnapshot && (
+            <button
+              type="button"
+              className="btn-outline"
+              onClick={() => {
+                const html = buildBookingInvoiceHtml(successBookingSnapshot)
+                const name = String(successBookingSnapshot.reference || 'booking').replace(/\W+/g, '_')
+                downloadInvoiceHtml(`nammastays-receipt-${name}.html`, html)
+                showToast('Receipt downloaded.')
+              }}
+            >
+              <FileText size={14} style={{ verticalAlign: '-2px', marginRight: 6 }} aria-hidden />
+              Download receipt
+            </button>
+          )}
           <button type="button" className="btn-gold" onClick={() => navigate('/bookings')}>View my dashboard</button>
           <button type="button" className="btn-ghost" onClick={() => navigate('/')}>Back to home</button>
         </div>
@@ -308,64 +568,163 @@ export default function Payment() {
                   <Calendar size={14} style={{ verticalAlign: '-2px', marginRight: 6 }} aria-hidden />
                   Adjust dates here if needed — totals update automatically before you pay.
                 </p>
-              </div>
-
-              <div className={styles.cardHeader}>
-                <CreditCard size={16} color="var(--gold)" />
-                <span>Credit or Debit Card</span>
-                <div className={styles.cardBrands}>
-                  <span className={styles.brand}>VISA</span>
-                  <span className={styles.brand}>MC</span>
-                  <span className={styles.brand}>AMEX</span>
+                <div className={styles.stayField} style={{ marginTop: 16, gridColumn: '1 / -1' }}>
+                  <label className={styles.stayLabel} htmlFor="pay-promo">
+                    Promo code
+                  </label>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <input
+                      id="pay-promo"
+                      type="text"
+                      className={styles.stayInput}
+                      style={{ flex: '1 1 140px', maxWidth: 220 }}
+                      value={promoCodeInput}
+                      onChange={e => setPromoCodeInput(e.target.value.toUpperCase())}
+                      placeholder="Optional"
+                      autoComplete="off"
+                    />
+                    <button
+                      type="button"
+                      className="btn-outline"
+                      style={{ padding: '10px 16px', fontSize: '12px' }}
+                      onClick={() => {
+                        const hit = findActivePromo(hostPromotions, property.id, promoCodeInput)
+                        if (!hit) {
+                          setPromoApplied(null)
+                          showToast('Invalid or inactive code for this listing.')
+                          return
+                        }
+                        setPromoApplied(hit)
+                        showToast(`${hit.discountPct}% off room subtotal applied.`)
+                      }}
+                    >
+                      Apply
+                    </button>
+                    {promoApplied && (
+                      <button
+                        type="button"
+                        className="btn-ghost"
+                        style={{ fontSize: '12px' }}
+                        onClick={() => {
+                          setPromoApplied(null)
+                          setPromoCodeInput('')
+                        }}
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
 
-              <div className={styles.grid2}>
-                <div className={`form-group ${styles.fullWidth}`}>
-                  <label className="form-label">Cardholder Name</label>
-                  <input className={`form-input ${errors.cardName ? styles.inputError : ''}`} placeholder="As on card" value={form.cardName} onChange={e => set('cardName', e.target.value)} />
-                  {errors.cardName && <span className={styles.error}>{errors.cardName}</span>}
+              {(property.cancellationPolicyText ||
+                property.houseRulesText ||
+                (Array.isArray(property.policyAttachments) && property.policyAttachments.length > 0)) && (
+                <div className={styles.policyCheckout}>
+                  <div className={styles.policyCheckoutTitle}>
+                    <Shield size={16} color="var(--sage)" aria-hidden /> Host policies for this listing
+                  </div>
+                  {property.cancellationPolicyText && (
+                    <p className={styles.policyCheckoutP}>
+                      <strong>Cancellation.</strong> {property.cancellationPolicyText}
+                    </p>
+                  )}
+                  {property.houseRulesText && (
+                    <p className={styles.policyCheckoutP}>
+                      <strong>House rules.</strong> {property.houseRulesText}
+                    </p>
+                  )}
+                  {Array.isArray(property.policyAttachments) && property.policyAttachments.length > 0 && (
+                    <ul className={styles.policyCheckoutLinks}>
+                      {property.policyAttachments.map((a, i) => (
+                        <li key={i}>
+                          <a href={a.url} target="_blank" rel="noopener noreferrer">
+                            {a.label || 'Policy document'}
+                          </a>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <p className={styles.policyCheckoutNote}>By paying, you agree to these terms for this stay.</p>
                 </div>
-                <div className={`form-group ${styles.fullWidth}`}>
-                  <label className="form-label">Card Number</label>
-                  <input className={`form-input ${errors.cardNumber ? styles.inputError : ''}`} placeholder="0000 0000 0000 0000" value={form.cardNumber} onChange={e => set('cardNumber', formatCard(e.target.value))} />
-                  {errors.cardNumber && <span className={styles.error}>{errors.cardNumber}</span>}
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Expiry</label>
-                  <input className={`form-input ${errors.expiry ? styles.inputError : ''}`} placeholder="MM/YY" value={form.expiry} onChange={e => set('expiry', formatExpiry(e.target.value))} />
-                  {errors.expiry && <span className={styles.error}>{errors.expiry}</span>}
-                </div>
-                <div className="form-group">
-                  <label className="form-label">CVV</label>
-                  <input className={`form-input ${errors.cvv ? styles.inputError : ''}`} placeholder="•••" maxLength={4} value={form.cvv} onChange={e => set('cvv', e.target.value.replace(/\D/g, ''))} />
-                  {errors.cvv && <span className={styles.error}>{errors.cvv}</span>}
-                </div>
-              </div>
+              )}
 
-              <div className={styles.sectionDivider}>Billing Address</div>
+              {razorpayEnabled ? (
+                <>
+                  <div className={styles.cardHeader}>
+                    <CreditCard size={16} color="var(--gold)" />
+                    <span>Secure checkout</span>
+                    <div className={styles.cardBrands}>
+                      <span className={styles.brand}>Razorpay</span>
+                      <span className={styles.brand}>UPI</span>
+                      <span className={styles.brand}>CARDS</span>
+                    </div>
+                  </div>
+                  <p className={styles.razorpayNote}>
+                    Next step opens Razorpay to pay <strong>₹{total.toLocaleString('en-IN')}</strong> (includes GST &amp;
+                    service fee). Use test mode keys while developing.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <div className={styles.cardHeader}>
+                    <CreditCard size={16} color="var(--gold)" />
+                    <span>Credit or Debit Card</span>
+                    <div className={styles.cardBrands}>
+                      <span className={styles.brand}>VISA</span>
+                      <span className={styles.brand}>MC</span>
+                      <span className={styles.brand}>AMEX</span>
+                    </div>
+                  </div>
 
-              <div className={styles.grid2}>
-                <div className={`form-group ${styles.fullWidth}`}>
-                  <label className="form-label">Street Address</label>
-                  <input className={`form-input ${errors.billingAddress ? styles.inputError : ''}`} placeholder="123 Main St" value={form.billingAddress} onChange={e => set('billingAddress', e.target.value)} />
-                  {errors.billingAddress && <span className={styles.error}>{errors.billingAddress}</span>}
-                </div>
-                <div className="form-group">
-                  <label className="form-label">City</label>
-                  <input className={`form-input ${errors.city ? styles.inputError : ''}`} placeholder="City" value={form.city} onChange={e => set('city', e.target.value)} />
-                  {errors.city && <span className={styles.error}>{errors.city}</span>}
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Country</label>
-                  <input className={`form-input ${errors.country ? styles.inputError : ''}`} placeholder="Country" value={form.country} onChange={e => set('country', e.target.value)} />
-                  {errors.country && <span className={styles.error}>{errors.country}</span>}
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Postal Code</label>
-                  <input className="form-input" placeholder="ZIP" value={form.zip} onChange={e => set('zip', e.target.value)} />
-                </div>
-              </div>
+                  <div className={styles.grid2}>
+                    <div className={`form-group ${styles.fullWidth}`}>
+                      <label className="form-label">Cardholder Name</label>
+                      <input className={`form-input ${errors.cardName ? styles.inputError : ''}`} placeholder="As on card" value={form.cardName} onChange={e => set('cardName', e.target.value)} />
+                      {errors.cardName && <span className={styles.error}>{errors.cardName}</span>}
+                    </div>
+                    <div className={`form-group ${styles.fullWidth}`}>
+                      <label className="form-label">Card Number</label>
+                      <input className={`form-input ${errors.cardNumber ? styles.inputError : ''}`} placeholder="0000 0000 0000 0000" value={form.cardNumber} onChange={e => set('cardNumber', formatCard(e.target.value))} />
+                      {errors.cardNumber && <span className={styles.error}>{errors.cardNumber}</span>}
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Expiry</label>
+                      <input className={`form-input ${errors.expiry ? styles.inputError : ''}`} placeholder="MM/YY" value={form.expiry} onChange={e => set('expiry', formatExpiry(e.target.value))} />
+                      {errors.expiry && <span className={styles.error}>{errors.expiry}</span>}
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">CVV</label>
+                      <input className={`form-input ${errors.cvv ? styles.inputError : ''}`} placeholder="•••" maxLength={4} value={form.cvv} onChange={e => set('cvv', e.target.value.replace(/\D/g, ''))} />
+                      {errors.cvv && <span className={styles.error}>{errors.cvv}</span>}
+                    </div>
+                  </div>
+
+                  <div className={styles.sectionDivider}>Billing Address</div>
+
+                  <div className={styles.grid2}>
+                    <div className={`form-group ${styles.fullWidth}`}>
+                      <label className="form-label">Street Address</label>
+                      <input className={`form-input ${errors.billingAddress ? styles.inputError : ''}`} placeholder="123 Main St" value={form.billingAddress} onChange={e => set('billingAddress', e.target.value)} />
+                      {errors.billingAddress && <span className={styles.error}>{errors.billingAddress}</span>}
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">City</label>
+                      <input className={`form-input ${errors.city ? styles.inputError : ''}`} placeholder="City" value={form.city} onChange={e => set('city', e.target.value)} />
+                      {errors.city && <span className={styles.error}>{errors.city}</span>}
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Country</label>
+                      <input className={`form-input ${errors.country ? styles.inputError : ''}`} placeholder="Country" value={form.country} onChange={e => set('country', e.target.value)} />
+                      {errors.country && <span className={styles.error}>{errors.country}</span>}
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Postal Code</label>
+                      <input className="form-input" placeholder="ZIP" value={form.zip} onChange={e => set('zip', e.target.value)} />
+                    </div>
+                  </div>
+                </>
+              )}
 
               <div className={styles.sectionDivider}>Special Requests</div>
               <div className="form-group">
@@ -382,7 +741,11 @@ export default function Payment() {
           {step === 2 && (
             <div className={styles.formBlock}>
               <h2 className={styles.formTitle}>Confirm Your Booking</h2>
-              <p className={styles.confirmNote}>Please review all details before confirming. Your card will be charged immediately upon confirmation.</p>
+              <p className={styles.confirmNote}>
+                {razorpayEnabled
+                  ? 'Review details, then pay securely with Razorpay (UPI, cards, netbanking per your Razorpay settings).'
+                  : 'Please review all details before confirming. Your card will be charged immediately upon confirmation.'}
+              </p>
 
               <div className={styles.confirmGrid}>
                 <div className={styles.confirmRow}><span>Property</span><strong>{property.name}</strong></div>
@@ -391,10 +754,33 @@ export default function Payment() {
                 <div className={styles.confirmRow}><span>Check Out</span><strong>{stay.checkOut}</strong></div>
                 <div className={styles.confirmRow}><span>Duration</span><strong>{nights} nights</strong></div>
                 <div className={styles.confirmRow}><span>Guests</span><strong>{stay.guests}</strong></div>
-                <div className={styles.confirmRow}><span>Card</span><strong>•••• {form.cardNumber.slice(-4)}</strong></div>
+                {razorpayEnabled ? (
+                  <div className={styles.confirmRow}>
+                    <span>Payment</span>
+                    <strong>Razorpay secure checkout</strong>
+                  </div>
+                ) : (
+                  <div className={styles.confirmRow}>
+                    <span>Card</span>
+                    <strong>•••• {form.cardNumber.replace(/\s/g, '').slice(-4)}</strong>
+                  </div>
+                )}
                 {form.specialRequests && <div className={styles.confirmRow}><span>Requests</span><strong>{form.specialRequests}</strong></div>}
+                <div className={styles.confirmRow}>
+                  <span>Room subtotal</span>
+                  <strong>₹{pricing.roomSubtotal.toLocaleString('en-IN')}</strong>
+                </div>
+                <div className={styles.confirmRow}>
+                  <span>GST ({pricing.gstPercentLabel}%)</span>
+                  <strong>₹{pricing.gstAmount.toLocaleString('en-IN')}</strong>
+                </div>
+                <div className={styles.confirmRow}>
+                  <span>Service fee ({pricing.serviceFeePercentLabel}%)</span>
+                  <strong>₹{pricing.serviceFeeAmount.toLocaleString('en-IN')}</strong>
+                </div>
+                <div className={styles.confirmRowMuted}>{pricing.serviceFeeTierNote}</div>
                 <div className={`${styles.confirmRow} ${styles.totalConfirmRow}`}>
-                  <span>Total Charged</span><strong>₹{total.toLocaleString('en-IN')}</strong>
+                  <span>Total charged</span><strong>₹{total.toLocaleString('en-IN')}</strong>
                 </div>
               </div>
 
@@ -412,7 +798,13 @@ export default function Payment() {
                 onClick={handleConfirm}
                 disabled={loading}
               >
-                {loading ? 'Processing...' : `Confirm & Pay ₹${total.toLocaleString('en-IN')}`}
+                {loading
+                  ? razorpayEnabled
+                    ? 'Opening Razorpay...'
+                    : 'Processing...'
+                  : razorpayEnabled
+                    ? `Pay ₹${total.toLocaleString('en-IN')} with Razorpay`
+                    : `Confirm & Pay ₹${total.toLocaleString('en-IN')}`}
               </button>
             </div>
           )}
@@ -437,9 +829,46 @@ export default function Payment() {
 
               <div className={styles.summaryDivider} />
 
-              <div className={styles.summaryRow}><span>₹{property.price.toLocaleString('en-IN')} × {nights}</span><span>₹{(property.price * nights).toLocaleString('en-IN')}</span></div>
-              <div className={styles.summaryRow}><span>Service & Concierge</span><span className={styles.included}>Included</span></div>
-              <div className={`${styles.summaryRow} ${styles.totalRow}`}><span>Total</span><span>₹{total.toLocaleString('en-IN')}</span></div>
+              {pricing.promoDiscountAmount > 0 ? (
+                <>
+                  <div className={styles.summaryRow}>
+                    <span>Room {nights > 0 ? `(${nights} nights)` : ''}</span>
+                    <span>₹{pricing.roomSubtotalBeforePromo.toLocaleString('en-IN')}</span>
+                  </div>
+                  <div className={styles.summaryRow}>
+                    <span>Promo ({promoApplied?.code})</span>
+                    <span>−₹{pricing.promoDiscountAmount.toLocaleString('en-IN')}</span>
+                  </div>
+                  <div className={styles.summaryRow}>
+                    <span>Room (after promo)</span>
+                    <span>₹{pricing.roomSubtotal.toLocaleString('en-IN')}</span>
+                  </div>
+                </>
+              ) : (
+                <div className={styles.summaryRow}>
+                  <span>Room subtotal{nights > 0 ? ` · ${nights} nights` : ''}</span>
+                  <span>₹{pricing.roomSubtotal.toLocaleString('en-IN')}</span>
+                </div>
+              )}
+              <div className={styles.summaryRow}>
+                <span>GST ({pricing.gstPercentLabel}%)</span>
+                <span>₹{pricing.gstAmount.toLocaleString('en-IN')}</span>
+              </div>
+              <div className={styles.summaryRow}>
+                <span title={pricing.serviceFeeTierNote}>Service fee ({pricing.serviceFeePercentLabel}%)</span>
+                <span>₹{pricing.serviceFeeAmount.toLocaleString('en-IN')}</span>
+              </div>
+              <p className={styles.summaryTierHint}>{pricing.serviceFeeTierNote}</p>
+              <div className={`${styles.summaryRow} ${styles.summaryRowStack}`}>
+                <span>
+                  Host platform fee ({Math.round((pricing.platformCommissionRate ?? commissionRate) * 100)}%)
+                </span>
+                <span className={styles.summaryMuted}>Deducted from host room share · not added to your total</span>
+              </div>
+              <div className={`${styles.summaryRow} ${styles.totalRow}`}>
+                <span>You pay</span>
+                <span>₹{total.toLocaleString('en-IN')}</span>
+              </div>
             </div>
           </div>
 

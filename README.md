@@ -10,7 +10,7 @@ A complete, production-ready luxury property booking platform built with React +
 | **Properties** | `/properties` | Full listing with search & filters |
 | **Property Detail** | `/property/:id` | Full property page with booking widget |
 | **Payment** | `/payment` | Multi-step payment + booking confirmation |
-| **Login** | `/login` | Auth with demo accounts |
+| **Login** | `/login` | Email / phone sign-in |
 | **Sign Up** | `/signup` | Guest or Owner registration |
 | **My Stays** | `/bookings` | Guest booking history |
 | **Owner Portal** | `/owner` | Dashboard: properties, bookings, earnings |
@@ -18,13 +18,15 @@ A complete, production-ready luxury property booking platform built with React +
 | **Submit Property** | `/list` | Multi-step property application |
 | **About** | `/about` | Brand story and philosophy |
 
-## Demo Accounts
+## Role logins (built-in)
 
-| Email | Password | Role |
-|-------|----------|------|
-| `admin@sanctum.com` | anything | Admin — full master dashboard |
-| `owner@sanctum.com` | anything | Owner — owner portal |
-| any other email | anything | Guest |
+These emails receive Admin / Owner roles automatically; use any password with the current auth helper.
+
+| Email | Role |
+|-------|------|
+| `admin@sanctum.com` | Admin — master console |
+| `owner@sanctum.com` | Owner — owner portal |
+| Any other email | Guest |
 
 ## Quick Start
 

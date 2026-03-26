@@ -19,5 +19,6 @@ export function normalizeBookingRow(booking) {
     status: booking.status || 'confirmed',
     reference,
     createdAt: booking.createdAt ?? new Date().toISOString(),
+    settlementStatus: booking.settlementStatus || 'pending_settlement',
   }
 }

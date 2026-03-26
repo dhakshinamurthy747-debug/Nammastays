@@ -11,8 +11,7 @@ export default function Help() {
         <div className="section-label">Support</div>
         <h1 className={styles.title}>Help centre</h1>
         <p className={styles.sub}>
-          Quick answers for guests and hosts. This demo mirrors a real help hub — on production, articles and chat would live
-          here.
+          Quick answers for guests and hosts. For deeper topics, contact us or open the full legal pages linked in the footer.
         </p>
       </header>
 
@@ -28,7 +27,10 @@ export default function Help() {
               Sign in is required before payment. Your booking appears under <Link to="/bookings">My account</Link> after
               checkout.
             </li>
-            <li>Cancellations and changes: in a live app, policies are per listing; here everything is simulated.</li>
+            <li>
+              Cancellations and changes follow each listing&apos;s policy and the <Link to="/terms">Terms</Link>; use My account
+              to cancel when allowed.
+            </li>
           </ul>
         </section>
 
@@ -41,7 +43,8 @@ export default function Help() {
               review.
             </li>
             <li>
-              After approval (demo: Master console), use <Link to="/owner">Owner portal</Link> when logged in as an owner.
+              After an admin approves your listing in the master console, use <Link to="/owner">Owner portal</Link> while signed
+              in as an owner.
             </li>
             <li>
               Questions:{' '}

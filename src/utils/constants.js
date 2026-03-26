@@ -3,10 +3,16 @@ export const STORAGE_KEYS = {
   BOOKINGS: 'ns_bookings',
   USER_META: 'ns_user_meta',
   HOST_LISTINGS: 'ns_host_listings',
+  HOST_OPERATIONS: 'ns_host_operations',
+  HOST_PROMOS: 'ns_host_promotions',
+  PROPERTY_REVIEWS: 'ns_property_reviews',
+  IN_APP_NOTIFICATIONS: 'ns_in_app_notifications',
   AUTH_SESSION: 'ns_auth_session',
   PAYMENT_RESUME: 'ns_payment_resume',
-  ADMIN_MOCK_APP_STATUS: 'ns_admin_mock_app_status',
   ADMIN_PLATFORM_SETTINGS: 'ns_admin_platform_settings',
+  HOST_MESSAGES: 'ns_host_messages',
+  DISPUTES: 'ns_disputes',
+  CLIENT_ERROR_LOG: 'ns_client_error_log',
 }
 
 export const ROUTES = {
@@ -25,7 +31,8 @@ export const ROUTES = {
   COOKIES: '/cookies',
 }
 
-export const DEMO_EMAILS = {
+/** Fixed logins that receive Admin / Owner roles when signing in with these emails */
+export const PLATFORM_ROLE_EMAILS = {
   ADMIN: 'admin@sanctum.com',
   OWNER: 'owner@sanctum.com',
 }

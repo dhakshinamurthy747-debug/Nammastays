@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react'
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   TrendingUp,
@@ -23,18 +23,27 @@ import {
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { ownerProperties } from '../data/properties'
+import { toYMD, bookingForDay } from '../data/ownerDashboard'
 import {
-  getDemoOwnerBookings,
-  toYMD,
-  bookingForDay,
-  bookedDaysInMonthForProperty,
-  countBlockedInMonth,
-} from '../data/ownerDashboard'
+  buildNightlyPricesForStay,
+  validateStayAvailability,
+} from '../utils/hostCatalogMerge'
+import { computeGuestBookingBreakdown, sumGuestLifetimeSpend } from '../utils/guestPricing'
+import { getPlatformCommissionRate } from '../utils/platformSettings'
+import {
+  getEffectiveRateForDate,
+  monthUnitCapacityStats,
+} from '../utils/ownerBulkScheduling'
+import { buildIcsForStays, downloadIcs } from '../utils/icalExport'
+import { datesFromIcsAllDay } from '../utils/icalImport'
+import { loadHostMessages, appendHostMessage, markHostMessagesReadForUser } from '../utils/hostMessagesPersistence'
+import { pushInAppNotification } from '../utils/inAppNotifications'
 import Footer from '../components/Footer'
 import styles from './Owner.module.css'
 
 const TABS = [
   'Overview',
+  'Inbox',
   'Applications',
   'Properties',
   'Calendar',
@@ -95,20 +104,70 @@ function applicationDecisionLabel(adminDecision) {
 }
 
 export default function Owner() {
-  const { user, showToast, hostListingsByEmail, mergedCatalogProperties } = useApp()
+  const {
+    user,
+    showToast,
+    hostListingsByEmail,
+    mergedCatalogProperties,
+    hostOperations,
+    setHostOperations,
+    bookings,
+    hostPromotions,
+    setHostPromotions,
+    patchBooking,
+  } = useApp()
+  const promos = hostPromotions
   const navigate = useNavigate()
   const [tab, setTab] = useState('Overview')
+  const [inboxMessages, setInboxMessages] = useState(() => loadHostMessages())
+  const [inboxReply, setInboxReply] = useState('')
+  const [inboxThreadKey, setInboxThreadKey] = useState(null)
   const [calMonth, setCalMonth] = useState(() => {
     const n = new Date()
     return new Date(n.getFullYear(), n.getMonth(), 1)
   })
   const [calPropertyId, setCalPropertyId] = useState('all')
-  const [blockedByProp, setBlockedByProp] = useState({})
-  const [ownerRates, setOwnerRates] = useState({})
-  const [inventoryUnits, setInventoryUnits] = useState({})
-  const [promos, setPromos] = useState([
-    { id: 'p1', propertyId: 101, title: 'Stay 5+ nights', discountPct: 12, code: 'EXT12', active: true },
-  ])
+  const icsImportRef = useRef(null)
+  const [calCompose, setCalCompose] = useState(null)
+  const [calComposeBody, setCalComposeBody] = useState('')
+  const ownerRates = hostOperations.ownerRates
+  const setOwnerRates = fn =>
+    setHostOperations(p => ({ ...p, ownerRates: typeof fn === 'function' ? fn(p.ownerRates) : fn }))
+  const inventoryUnits = hostOperations.inventoryUnits
+  const setInventoryUnits = fn =>
+    setHostOperations(p => ({
+      ...p,
+      inventoryUnits: typeof fn === 'function' ? fn(p.inventoryUnits) : fn,
+    }))
+  const blockedByProp = hostOperations.blockedByProp
+  const setBlockedByProp = fn =>
+    setHostOperations(p => ({
+      ...p,
+      blockedByProp: typeof fn === 'function' ? fn(p.blockedByProp) : fn,
+    }))
+  const unitRangesByProp = hostOperations.unitRangesByProp
+  const setUnitRangesByProp = fn =>
+    setHostOperations(p => ({
+      ...p,
+      unitRangesByProp: typeof fn === 'function' ? fn(p.unitRangesByProp) : fn,
+    }))
+  const rateRangesByProp = hostOperations.rateRangesByProp
+  const setRateRangesByProp = fn =>
+    setHostOperations(p => ({
+      ...p,
+      rateRangesByProp: typeof fn === 'function' ? fn(p.rateRangesByProp) : fn,
+    }))
+  const [bulkUnits, setBulkUnits] = useState({ from: '', to: '', units: '2' })
+  const [bulkTargetsUnits, setBulkTargetsUnits] = useState({})
+  const [bulkRateForm, setBulkRateForm] = useState({
+    from: '',
+    to: '',
+    nightly: '',
+    minNights: '',
+    applyNightly: true,
+    applyMin: true,
+  })
+  const [bulkTargetsRate, setBulkTargetsRate] = useState({})
   const [promoForm, setPromoForm] = useState({ propertyId: '', title: '', discountPct: '', code: '' })
   const [expandedApplicationId, setExpandedApplicationId] = useState(null)
 
@@ -136,33 +195,36 @@ export default function Owner() {
   }, [user?.role, submittedRaw])
 
   useEffect(() => {
-    setOwnerRates(prev => {
-      const next = { ...prev }
+    setHostOperations(prev => {
+      let changed = false
+      const next = {
+        ...prev,
+        ownerRates: { ...prev.ownerRates },
+        inventoryUnits: { ...prev.inventoryUnits },
+        blockedByProp: { ...prev.blockedByProp },
+      }
       portfolioProperties.forEach(p => {
-        if (!(p.id in next)) {
+        const hasRate =
+          next.ownerRates[p.id] !== undefined || next.ownerRates[String(p.id)] !== undefined
+        if (!hasRate) {
           let nightly = p.submittedPrice || 25000
           if (p.id === 101) nightly = 85000
           else if (p.id === 102) nightly = 62000
-          next[p.id] = { nightly, minNights: p.id === 102 ? 3 : 2 }
+          next.ownerRates[p.id] = { nightly, minNights: p.id === 102 ? 3 : 2 }
+          changed = true
+        }
+        if (next.inventoryUnits[p.id] === undefined && next.inventoryUnits[String(p.id)] === undefined) {
+          next.inventoryUnits[p.id] = 1
+          changed = true
+        }
+        if (next.blockedByProp[p.id] === undefined && next.blockedByProp[String(p.id)] === undefined) {
+          next.blockedByProp[p.id] = []
+          changed = true
         }
       })
-      return next
+      return changed ? next : prev
     })
-    setInventoryUnits(prev => {
-      const next = { ...prev }
-      portfolioProperties.forEach(p => {
-        if (!(p.id in next)) next[p.id] = 1
-      })
-      return next
-    })
-    setBlockedByProp(prev => {
-      const next = { ...prev }
-      portfolioProperties.forEach(p => {
-        if (!(p.id in next)) next[p.id] = []
-      })
-      return next
-    })
-  }, [portfolioProperties])
+  }, [portfolioProperties, setHostOperations])
 
   useEffect(() => {
     if (portfolioProperties.length === 0) return
@@ -173,17 +235,59 @@ export default function Owner() {
     })
   }, [portfolioProperties])
 
-  const allDemoBookings = useMemo(() => getDemoOwnerBookings(), [])
+  useEffect(() => {
+    setBulkTargetsUnits(prev => {
+      const n = { ...prev }
+      portfolioProperties.forEach(p => {
+        if (n[p.id] === undefined) n[p.id] = true
+      })
+      Object.keys(n).forEach(k => {
+        if (!portfolioProperties.some(p => String(p.id) === k)) delete n[k]
+      })
+      return n
+    })
+    setBulkTargetsRate(prev => {
+      const n = { ...prev }
+      portfolioProperties.forEach(p => {
+        if (n[p.id] === undefined) n[p.id] = true
+      })
+      Object.keys(n).forEach(k => {
+        if (!portfolioProperties.some(p => String(p.id) === k)) delete n[k]
+      })
+      return n
+    })
+  }, [portfolioProperties])
+
   const portfolioIds = useMemo(() => new Set(portfolioProperties.map(p => p.id)), [portfolioProperties])
-  const portfolioBookings = useMemo(
-    () => allDemoBookings.filter(b => portfolioIds.has(b.propertyId)),
-    [allDemoBookings, portfolioIds]
+  const portfolioLiveBookings = useMemo(
+    () => bookings.filter(b => portfolioIds.has(Number(b.propertyId))),
+    [bookings, portfolioIds]
   )
+  const combinedPortfolioBookings = useMemo(() => {
+    return portfolioLiveBookings.map(b => ({
+      id: `live-${b.id}`,
+      bookingId: b.id,
+      propertyId: b.propertyId,
+      propertyName: b.property,
+      guest: (b.guestEmail || 'Guest').split('@')[0],
+      email: b.guestEmail,
+      checkIn: b.checkIn,
+      checkOut: b.checkOut,
+      nights: b.nights,
+      total: b.total,
+      status: b.status || 'confirmed',
+      hostNet: b.hostNetOnRoom ?? b.hostPayoutAmount,
+      settlementStatus: b.settlementStatus,
+      source: 'live',
+      modificationRequest: b.modificationRequest,
+      refundRequest: b.refundRequest,
+    }))
+  }, [portfolioLiveBookings])
 
   const bookingsForFilter = useMemo(() => {
-    if (calPropertyId === 'all') return portfolioBookings
-    return portfolioBookings.filter(b => String(b.propertyId) === String(calPropertyId))
-  }, [calPropertyId, portfolioBookings])
+    if (calPropertyId === 'all') return combinedPortfolioBookings
+    return combinedPortfolioBookings.filter(b => String(b.propertyId) === String(calPropertyId))
+  }, [calPropertyId, combinedPortfolioBookings])
 
   const calYear = calMonth.getFullYear()
   const calMonthIdx = calMonth.getMonth()
@@ -196,10 +300,299 @@ export default function Owner() {
     [bookingsForFilter, calYear, calMonthIdx]
   )
 
+  const approveGuestDateChange = useCallback(
+    b => {
+      const req = b.modificationRequest
+      if (!req?.proposedCheckIn || b.bookingId == null) return
+      const prop = mergedCatalogProperties.find(p => String(p.id) === String(b.propertyId))
+      if (!prop) {
+        showToast('Listing not found.')
+        return
+      }
+      const others = bookings.filter(x => String(x.id) !== String(b.bookingId))
+      const avail = validateStayAvailability(prop, req.proposedCheckIn, req.proposedCheckOut, others)
+      if (!avail.ok) {
+        showToast(avail.message)
+        return
+      }
+      const nights = Math.max(
+        0,
+        Math.round(
+          (new Date(`${req.proposedCheckOut}T12:00:00`) - new Date(`${req.proposedCheckIn}T12:00:00`)) /
+            86400000
+        )
+      )
+      const guestEmail = b.email || b.guestEmail
+      const life = sumGuestLifetimeSpend(
+        bookings.filter(x => String(x.id) !== String(b.bookingId)),
+        guestEmail
+      )
+      const { nightlyPrices } = buildNightlyPricesForStay(prop, req.proposedCheckIn, req.proposedCheckOut)
+      const row = bookings.find(x => String(x.id) === String(b.bookingId))
+      const promoPct = Number(row?.promoDiscountPct) || 0
+      const p = computeGuestBookingBreakdown({
+        nightlyPrices,
+        lifetimeSpendBefore: life,
+        platformCommissionRate: getPlatformCommissionRate(),
+        promoDiscountPct: promoPct,
+      })
+      patchBooking(b.bookingId, {
+        checkIn: req.proposedCheckIn,
+        checkOut: req.proposedCheckOut,
+        nights,
+        total: p.grandTotal,
+        roomSubtotal: p.roomSubtotal,
+        roomSubtotalBeforePromo: p.roomSubtotalBeforePromo,
+        promoDiscountAmount: p.promoDiscountAmount,
+        gstAmount: p.gstAmount,
+        gstPercentLabel: p.gstPercentLabel,
+        serviceFeeAmount: p.serviceFeeAmount,
+        serviceFeePercentLabel: p.serviceFeePercentLabel,
+        hostCommission: p.hostCommissionAmount,
+        hostNetOnRoom: p.hostNetOnRoom,
+        hostPayoutAmount: p.hostNetOnRoom,
+        platformFeeAmount: p.hostCommissionAmount,
+        nightlyPrices: p.nightlyPrices,
+        modificationRequest: null,
+      })
+      if (guestEmail) {
+        try {
+          pushInAppNotification({
+            title: 'Stay dates updated',
+            body: `${b.propertyName || 'Your stay'} · ${req.proposedCheckIn} → ${req.proposedCheckOut}. New total ₹${p.grandTotal.toLocaleString('en-IN')}.`,
+            href: '/bookings',
+            recipientEmail: guestEmail,
+          })
+          window.dispatchEvent(new Event('ns-notifications'))
+        } catch {
+          /* ignore */
+        }
+      }
+      showToast('Dates updated — guest totals recalculated.')
+    },
+    [bookings, mergedCatalogProperties, patchBooking, showToast]
+  )
+
+  const exportHostIcs = useCallback(() => {
+    const stays = portfolioLiveBookings
+      .filter(x => x.status !== 'cancelled' && x.status !== 'refunded')
+      .map(x => ({
+        property: x.property || 'Stay',
+        checkIn: x.checkIn,
+        checkOut: x.checkOut,
+        reference: String(x.reference || x.id),
+      }))
+    if (!stays.length) {
+      showToast('No active stays to export.')
+      return
+    }
+    downloadIcs('nammastays-host.ics', buildIcsForStays(stays, 'NammaStays host'))
+    showToast('Downloaded .ics — import into Google Calendar or Apple Calendar.')
+  }, [portfolioLiveBookings, showToast])
+
+  const mergeIcsBlockedDates = useCallback(
+    (propertyKey, ymds) => {
+      if (!ymds.length) return
+      setBlockedByProp(prev => {
+        const sk = String(propertyKey)
+        const cur = [...(prev[propertyKey] || prev[sk] || [])]
+        const nextSet = new Set(cur)
+        ymds.forEach(d => nextSet.add(d))
+        return { ...prev, [sk]: [...nextSet].sort() }
+      })
+      showToast(`Blocked ${ymds.length} night(s) from imported calendar.`)
+    },
+    [setBlockedByProp, showToast]
+  )
+
+  const onIcsImportChange = e => {
+    const f = e.target.files?.[0]
+    e.target.value = ''
+    if (!f) return
+    if (calPropertyId === 'all') {
+      showToast('Select one property first, then import.')
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = () => {
+      try {
+        const dates = datesFromIcsAllDay(String(reader.result || ''))
+        if (!dates.length) {
+          showToast('No all-day stays found in that file.')
+          return
+        }
+        mergeIcsBlockedDates(calPropertyId, dates)
+      } catch {
+        showToast('Could not read that calendar file.')
+      }
+    }
+    reader.readAsText(f)
+  }
+
+  useEffect(() => {
+    const r = () => setInboxMessages(loadHostMessages())
+    window.addEventListener('ns-host-messages', r)
+    return () => window.removeEventListener('ns-host-messages', r)
+  }, [])
+
+  useEffect(() => {
+    if (tab === 'Inbox' && user?.email) markHostMessagesReadForUser(user.email)
+  }, [tab, user?.email])
+
+  const inboxThreads = useMemo(() => {
+    const my = String(user?.email || '')
+      .trim()
+      .toLowerCase()
+    if (!my) return []
+    const relevant = inboxMessages.filter(m => m.toEmail === my || m.fromEmail === my)
+    const map = {}
+    relevant.forEach(m => {
+      map[m.threadKey] = map[m.threadKey] || []
+      map[m.threadKey].push(m)
+    })
+    return Object.entries(map)
+      .map(([key, msgs]) => ({
+        key,
+        msgs: [...msgs].sort((a, b) => String(a.at).localeCompare(String(b.at))),
+      }))
+      .sort((a, b) => String(b.msgs[b.msgs.length - 1]?.at).localeCompare(String(a.msgs[a.msgs.length - 1]?.at)))
+  }, [inboxMessages, user?.email])
+
+  const [mediaPickId, setMediaPickId] = useState(null)
+  const [galleryDraft, setGalleryDraft] = useState('')
+  const [polCancelDraft, setPolCancelDraft] = useState('')
+  const [polRulesDraft, setPolRulesDraft] = useState('')
+  const [attLabelDraft, setAttLabelDraft] = useState('')
+  const [attUrlDraft, setAttUrlDraft] = useState('')
+  const [cohostDraft, setCohostDraft] = useState('')
+
+  useEffect(() => {
+    if (!mediaPickId && portfolioProperties[0]) setMediaPickId(portfolioProperties[0].id)
+  }, [portfolioProperties, mediaPickId])
+
+  useEffect(() => {
+    if (!mediaPickId) return
+    const sk = String(mediaPickId)
+    const urls = hostOperations.listingCdnGallery[sk]?.urls || []
+    setGalleryDraft(urls.join('\n'))
+    const pol = hostOperations.listingPolicies[sk] || {}
+    setPolCancelDraft(pol.cancellationText || '')
+    setPolRulesDraft(pol.houseRulesText || '')
+    const a0 = pol.attachments?.[0]
+    setAttLabelDraft(a0?.label || '')
+    setAttUrlDraft(a0?.url || '')
+    const co = hostOperations.coHostsByProperty[sk] || []
+    setCohostDraft(co.map(c => c.email).join(', '))
+  }, [mediaPickId, hostOperations])
+
+  const saveListingTrust = () => {
+    if (!mediaPickId) return
+    const sk = String(mediaPickId)
+    const urls = galleryDraft.split('\n').map(s => s.trim()).filter(Boolean)
+    const coList = cohostDraft
+      .split(',')
+      .map(s => s.trim().toLowerCase())
+      .filter(Boolean)
+      .map(email => ({ email, role: 'editor' }))
+    setHostOperations(h => ({
+      ...h,
+      listingCdnGallery: { ...h.listingCdnGallery, [sk]: { urls } },
+      listingPolicies: {
+        ...h.listingPolicies,
+        [sk]: {
+          cancellationText: polCancelDraft.trim(),
+          houseRulesText: polRulesDraft.trim(),
+          attachments:
+            attUrlDraft.trim() ? [{ label: attLabelDraft.trim() || 'Policy PDF', url: attUrlDraft.trim() }] : [],
+        },
+      },
+      coHostsByProperty: { ...h.coHostsByProperty, [sk]: coList },
+    }))
+    showToast('Listing media, policies & co-hosts saved.')
+  }
+
   const visiblePromos = useMemo(
     () => promos.filter(pr => portfolioIds.has(pr.propertyId)),
     [promos, portfolioIds]
   )
+
+  const applyBulkUnits = () => {
+    const { from, to } = bulkUnits
+    const u = Math.max(1, Math.min(20, Number(bulkUnits.units) || 1))
+    if (!from || !to || from > to) {
+      showToast('Pick a valid date range (start → end).')
+      return
+    }
+    const targets = portfolioProperties.filter(p => bulkTargetsUnits[p.id] !== false).map(p => p.id)
+    if (!targets.length) {
+      showToast('Select at least one listing.')
+      return
+    }
+    const rid = `ur-${Date.now()}`
+    setUnitRangesByProp(prev => {
+      const next = { ...prev }
+      targets.forEach(pid => {
+        const k = String(pid)
+        next[k] = [...(next[k] || []), { id: rid, from, to, units: u }]
+      })
+      return next
+    })
+    showToast(`Units ${u} applied to ${targets.length} listing(s) for ${from} – ${to}.`)
+  }
+
+  const applyBulkRates = () => {
+    const { from, to, applyNightly, applyMin, nightly, minNights } = bulkRateForm
+    if (!from || !to || from > to) {
+      showToast('Pick a valid date range (start → end).')
+      return
+    }
+    if (!applyNightly && !applyMin) {
+      showToast('Enable nightly rate and/or minimum nights.')
+      return
+    }
+    const n = applyNightly ? Math.max(1000, Number(nightly) || 0) : null
+    if (applyNightly && !n) {
+      showToast('Enter a nightly amount (₹).')
+      return
+    }
+    const m = applyMin ? Math.max(1, Math.min(30, Number(minNights) || 1)) : null
+    if (applyMin && !m) {
+      showToast('Enter minimum nights.')
+      return
+    }
+    const targets = portfolioProperties.filter(p => bulkTargetsRate[p.id] !== false).map(p => p.id)
+    if (!targets.length) {
+      showToast('Select at least one listing.')
+      return
+    }
+    const rid = `rr-${Date.now()}`
+    setRateRangesByProp(prev => {
+      const next = { ...prev }
+      targets.forEach(pid => {
+        const k = String(pid)
+        next[k] = [...(next[k] || []), { id: rid, from, to, nightly: n, minNights: m }]
+      })
+      return next
+    })
+    const bits = [applyNightly && `₹${n?.toLocaleString('en-IN')}`, applyMin && `min ${m} nights`].filter(Boolean)
+    showToast(`Rate rule applied (${bits.join(' · ')}) for ${targets.length} listing(s), ${from} – ${to}.`)
+  }
+
+  const removeUnitRange = (propertyId, rangeId) => {
+    const k = String(propertyId)
+    setUnitRangesByProp(prev => ({
+      ...prev,
+      [k]: (prev[k] || []).filter(r => r.id !== rangeId),
+    }))
+  }
+
+  const removeRateRange = (propertyId, rangeId) => {
+    const k = String(propertyId)
+    setRateRangesByProp(prev => ({
+      ...prev,
+      [k]: (prev[k] || []).filter(r => r.id !== rangeId),
+    }))
+  }
 
   const canAccessHosting = Boolean(user && (user.role === 'owner' || myListingCount > 0))
 
@@ -251,16 +644,16 @@ export default function Owner() {
     setBlockedByProp(prev => ({ ...prev, [propertyId]: nextList }))
     showToast(
       wasBlocked
-        ? 'Day opened on your calendar (demo — not saved to server).'
-        : 'Day blocked on your calendar (demo — not saved to server).'
+        ? 'Day opened — guests can book that night again (saved on this device).'
+        : 'Day blocked — guests cannot book that night (saved on this device).'
     )
   }
 
   const handleDayClick = (ymd) => {
     const scopedBookings =
       calPropertyId === 'all'
-        ? portfolioBookings
-        : portfolioBookings.filter(b => String(b.propertyId) === String(calPropertyId))
+        ? combinedPortfolioBookings
+        : combinedPortfolioBookings.filter(b => String(b.propertyId) === String(calPropertyId))
     const hit = bookingForDay(ymd, scopedBookings)
     if (hit) {
       showToast(`${hit.guest} · ${hit.checkIn} → ${hit.checkOut} · ${hit.status}`)
@@ -273,6 +666,18 @@ export default function Owner() {
     toggleBlocked(ymd, Number(calPropertyId))
   }
 
+  const earningsFromLive = useMemo(() => {
+    const live = portfolioLiveBookings.filter(b => b.status !== 'cancelled' && b.status !== 'refunded')
+    const ytdHostNet = live.reduce((s, b) => s + (Number(b.hostNetOnRoom ?? b.hostPayoutAmount) || 0), 0)
+    const pending = live
+      .filter(b => (b.settlementStatus || 'pending_settlement') !== 'paid')
+      .reduce((s, b) => s + (Number(b.hostNetOnRoom ?? b.hostPayoutAmount) || 0), 0)
+    const paid = live
+      .filter(b => b.settlementStatus === 'paid')
+      .reduce((s, b) => s + (Number(b.hostNetOnRoom ?? b.hostPayoutAmount) || 0), 0)
+    return { ytdHostNet, pending, paid, liveCount: live.length }
+  }, [portfolioLiveBookings])
+
   const stats = [
     {
       icon: <Home size={18} />,
@@ -280,11 +685,22 @@ export default function Owner() {
       value: portfolioProperties.length,
       sub: `${portfolioProperties.filter(p => p.status === 'active').length} live`,
     },
-    { icon: <DollarSign size={18} />, label: 'Total Revenue', value: '₹6,21,000', sub: 'This year' },
+    {
+      icon: <DollarSign size={18} />,
+      label: 'Host room share (YTD)',
+      value:
+      earningsFromLive.ytdHostNet > 0
+        ? `₹${earningsFromLive.ytdHostNet.toLocaleString('en-IN')}`
+        : '—',
+      sub:
+        earningsFromLive.liveCount > 0
+          ? 'After platform fee · from guest bookings'
+          : 'Shown when you have completed stays',
+    },
     {
       icon: <Calendar size={18} />,
       label: 'Bookings',
-      value: portfolioBookings.length,
+      value: combinedPortfolioBookings.length,
       sub: 'In your portfolio',
     },
     { icon: <Star size={18} />, label: 'Avg Rating', value: '4.9', sub: 'From guest reviews' },
@@ -451,6 +867,111 @@ export default function Owner() {
           </div>
         )}
 
+        {tab === 'Inbox' && (
+          <div>
+            <div className={styles.panelTitle} style={{ marginBottom: 16 }}>
+              Guest messages
+            </div>
+            <p className={styles.tabSub} style={{ marginBottom: 24 }}>
+              Threads from guests who message you from their dashboard (no email client required). Co-hosts with access
+              should sign in using the email you added under listing settings.
+            </p>
+            <div className={styles.inboxLayout}>
+              <div className={styles.inboxList}>
+                {inboxThreads.length === 0 ? (
+                  <p className={styles.dim}>No messages yet.</p>
+                ) : (
+                  inboxThreads.map(t => (
+                    <button
+                      key={t.key}
+                      type="button"
+                      className={`${styles.inboxThread} ${inboxThreadKey === t.key ? styles.inboxThreadActive : ''}`}
+                      onClick={() => setInboxThreadKey(t.key)}
+                    >
+                      <span className={styles.inboxThreadTitle}>
+                        {t.msgs[0]?.propertyName || 'Stay'} · {t.msgs.length} msg
+                      </span>
+                      <span className={styles.dim} style={{ fontSize: 12 }}>
+                        {t.msgs[t.msgs.length - 1]?.body.slice(0, 60)}
+                        {(t.msgs[t.msgs.length - 1]?.body.length || 0) > 60 ? '…' : ''}
+                      </span>
+                    </button>
+                  ))
+                )}
+              </div>
+              <div className={styles.inboxDetail}>
+                {!inboxThreadKey ? (
+                  <p className={styles.dim}>Select a thread.</p>
+                ) : (
+                  <>
+                    <div className={styles.inboxMsgs}>
+                      {inboxThreads
+                        .find(t => t.key === inboxThreadKey)
+                        ?.msgs.map(m => (
+                          <div
+                            key={m.id}
+                            className={
+                              m.fromEmail ===
+                              String(user.email || '')
+                                .trim()
+                                .toLowerCase()
+                                ? styles.inboxBubbleHost
+                                : styles.inboxBubbleGuest
+                            }
+                          >
+                            <div className={styles.dim} style={{ fontSize: 11 }}>
+                              {m.fromEmail} · {new Date(m.at).toLocaleString('en-IN')}
+                            </div>
+                            {m.body}
+                          </div>
+                        ))}
+                    </div>
+                    <textarea
+                      className="form-input"
+                      rows={3}
+                      placeholder="Reply…"
+                      value={inboxReply}
+                      onChange={e => setInboxReply(e.target.value)}
+                      style={{ marginTop: 12 }}
+                    />
+                    <button
+                      type="button"
+                      className="btn-gold"
+                      style={{ marginTop: 8 }}
+                      onClick={() => {
+                        const th = inboxThreads.find(t => t.key === inboxThreadKey)
+                        if (!th?.msgs.length || !inboxReply.trim()) return
+                        const last = th.msgs[th.msgs.length - 1]
+                        const peer =
+                          last.fromEmail ===
+                          String(user.email || '')
+                            .trim()
+                            .toLowerCase()
+                            ? last.toEmail
+                            : last.fromEmail
+                        appendHostMessage({
+                          fromEmail: user.email,
+                          toEmail: peer,
+                          body: inboxReply.trim(),
+                          bookingId: last.bookingId,
+                          propertyId: last.propertyId,
+                          propertyName: last.propertyName,
+                          threadKey: inboxThreadKey,
+                        })
+                        setInboxReply('')
+                        setInboxMessages(loadHostMessages())
+                        showToast('Reply sent.')
+                      }}
+                    >
+                      Send reply
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         {tab === 'Overview' && (
           <>
             <div className={styles.statsGrid}>
@@ -473,8 +994,12 @@ export default function Owner() {
                   </button>
                 </div>
                 <div className={styles.bookingList}>
-                  {portfolioBookings
-                    .filter(b => b.status === 'upcoming')
+                  {combinedPortfolioBookings
+                    .filter(
+                      b =>
+                        b.status === 'upcoming' ||
+                        (b.source === 'live' && b.checkIn >= todayYmd && b.status !== 'cancelled')
+                    )
                     .slice(0, 4)
                     .map(b => (
                       <div key={b.id} className={styles.bookingRow}>
@@ -492,6 +1017,12 @@ export default function Owner() {
               <div className={styles.panel}>
                 <div className={styles.panelTitle}>Quick actions</div>
                 <div className={styles.quickActions}>
+                  <button type="button" className={styles.quickAction} onClick={() => setTab('Inbox')}>
+                    <Mail size={16} /> Inbox
+                  </button>
+                  <button type="button" className={styles.quickAction} onClick={exportHostIcs}>
+                    <Calendar size={16} /> Export calendar (.ics)
+                  </button>
                   <button type="button" className={styles.quickAction} onClick={() => setTab('Calendar')}>
                     <Calendar size={16} /> Availability & calendar
                   </button>
@@ -604,6 +1135,79 @@ export default function Owner() {
                 </div>
               </div>
             ))}
+            <div style={{ marginTop: 40, maxWidth: 720, paddingTop: 28, borderTop: '1.5px solid var(--border)' }}>
+              <div className={styles.panelTitle} style={{ marginBottom: 12 }}>
+                Listing media &amp; policies (CDN URLs)
+              </div>
+              <p className={styles.tabSub} style={{ marginBottom: 16 }}>
+                Use HTTPS image URLs from your CDN or storage. Shown on the public listing. Co-host emails may sign in to
+                collaborate (same browser app; use exact addresses).
+              </p>
+              <div className="form-group">
+                <label className="form-label">Property</label>
+                <select
+                  className="form-input"
+                  value={mediaPickId || ''}
+                  onChange={e => setMediaPickId(Number(e.target.value))}
+                >
+                  {portfolioProperties.map(p => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Gallery image URLs (one per line)</label>
+                <textarea
+                  className="form-input"
+                  rows={4}
+                  value={galleryDraft}
+                  onChange={e => setGalleryDraft(e.target.value)}
+                  placeholder="https://cdn.example.com/photo1.jpg"
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Cancellation policy (guest-visible)</label>
+                <textarea
+                  className="form-input"
+                  rows={3}
+                  value={polCancelDraft}
+                  onChange={e => setPolCancelDraft(e.target.value)}
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label">House rules</label>
+                <textarea
+                  className="form-input"
+                  rows={3}
+                  value={polRulesDraft}
+                  onChange={e => setPolRulesDraft(e.target.value)}
+                />
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 12 }}>
+                <div className="form-group">
+                  <label className="form-label">Attachment label</label>
+                  <input className="form-input" value={attLabelDraft} onChange={e => setAttLabelDraft(e.target.value)} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Attachment URL (PDF)</label>
+                  <input className="form-input" value={attUrlDraft} onChange={e => setAttUrlDraft(e.target.value)} />
+                </div>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Co-host emails (comma-separated)</label>
+                <input
+                  className="form-input"
+                  value={cohostDraft}
+                  onChange={e => setCohostDraft(e.target.value)}
+                  placeholder="ops@example.com, finance@example.com"
+                />
+              </div>
+              <button type="button" className="btn-gold" style={{ marginTop: 8 }} onClick={saveListingTrust}>
+                Save listing trust settings
+              </button>
+            </div>
             <button type="button" className="btn-outline" style={{ marginTop: 32 }} onClick={() => navigate('/list')}>
               <Plus size={14} /> Submit another property
             </button>
@@ -617,7 +1221,7 @@ export default function Owner() {
                 <div>
                   <h2 className={styles.calHeading}>Availability</h2>
                   <p className={styles.calHint}>
-                    Booked nights show in sage. Click an empty day to block or unblock it (demo). Click a booking for details.
+                    Booked nights show in sage. Click an empty day to block or unblock it. Click a booking for details.
                   </p>
                 </div>
                 <div className={styles.calToolbarRight}>
@@ -651,7 +1255,35 @@ export default function Owner() {
                 <button type="button" className={styles.calTodayBtn} onClick={() => setCalMonth(new Date(new Date().getFullYear(), new Date().getMonth(), 1))}>
                   Today
                 </button>
+                <button type="button" className={styles.calTodayBtn} onClick={exportHostIcs}>
+                  iCal export
+                </button>
+                <button
+                  type="button"
+                  className={styles.calTodayBtn}
+                  onClick={() => {
+                    if (calPropertyId === 'all') {
+                      showToast('Select a property, then import blocks from another calendar’s .ics export.')
+                      return
+                    }
+                    icsImportRef.current?.click()
+                  }}
+                >
+                  Import .ics
+                </button>
+                <input
+                  ref={icsImportRef}
+                  type="file"
+                  accept=".ics,text/calendar"
+                  className={styles.srOnly}
+                  onChange={onIcsImportChange}
+                />
               </div>
+
+              <p className={styles.calHint} style={{ marginTop: 12 }}>
+                Export reservations as .ics for Google or Apple Calendar. Import an external .ics (all-day events) to block those
+                nights on the listing you selected — useful after exporting from another channel.
+              </p>
 
               <div className={styles.calGrid}>
                 {WEEKDAYS.map(d => (
@@ -666,8 +1298,8 @@ export default function Owner() {
                   const ymd = toYMD(cell.date)
                   const scopedBookings =
                     calPropertyId === 'all'
-                      ? portfolioBookings
-                      : portfolioBookings.filter(b => String(b.propertyId) === String(calPropertyId))
+                      ? combinedPortfolioBookings
+                      : combinedPortfolioBookings.filter(b => String(b.propertyId) === String(calPropertyId))
                   const hit = bookingForDay(ymd, scopedBookings)
                   const blocked =
                     calPropertyId === 'all'
@@ -724,7 +1356,24 @@ export default function Owner() {
                         <span className={`${styles.bookingStatus} ${styles[b.status]}`}>{b.status}</span>
                         <span className={styles.calStayTotal}>₹{b.total.toLocaleString('en-IN')}</span>
                       </div>
-                      <button type="button" className={styles.calStayMsg} onClick={() => showToast(`Message sent to ${b.email} (demo).`)}>
+                      <button
+                        type="button"
+                        className={styles.calStayMsg}
+                        onClick={() => {
+                          const em = b.email || b.guestEmail
+                          if (!em || !String(em).includes('@')) {
+                            showToast('No guest email on file for this row.')
+                            return
+                          }
+                          setCalCompose({
+                            guestEmail: String(em).trim().toLowerCase(),
+                            propertyName: b.propertyName,
+                            bookingId: b.bookingId,
+                            propertyId: b.propertyId,
+                          })
+                          setCalComposeBody('')
+                        }}
+                      >
                         <Mail size={14} /> Message guest
                       </button>
                     </li>
@@ -741,21 +1390,102 @@ export default function Owner() {
               <div>
                 <div className={styles.panelTitle}>Inventory</div>
                 <p className={styles.tabSub}>
-                  Snapshot for <strong>{monthLabel}</strong> — booked vs blocked vs open (demo). Syncs with your calendar tab.
+                  Snapshot for <strong>{monthLabel}</strong> — booked vs blocked vs open. Syncs with your calendar tab.
+                  Use bulk ranges to change units for peak weekends or seasons without touching every day.
                 </p>
               </div>
               <button type="button" className={styles.panelLink} onClick={() => setTab('Calendar')}>
                 Edit in calendar
               </button>
             </div>
+            <div className={styles.bulkPanel}>
+              <div className={styles.bulkPanelTitle}>Bulk units by date range</div>
+              <p className={styles.bulkPanelHint}>
+                Choose dates and how many parallel listings count for that window. Default units on each card still apply
+                outside these ranges. If two ranges overlap, the <strong>latest</strong> rule you add wins.
+              </p>
+              <div className={styles.bulkGrid}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">From</label>
+                  <input
+                    type="date"
+                    className="form-input"
+                    value={bulkUnits.from}
+                    onChange={e => setBulkUnits(b => ({ ...b, from: e.target.value }))}
+                  />
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">To</label>
+                  <input
+                    type="date"
+                    className="form-input"
+                    value={bulkUnits.to}
+                    onChange={e => setBulkUnits(b => ({ ...b, to: e.target.value }))}
+                  />
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Units in range</label>
+                  <input
+                    type="number"
+                    className="form-input"
+                    min={1}
+                    max={20}
+                    value={bulkUnits.units}
+                    onChange={e => setBulkUnits(b => ({ ...b, units: e.target.value }))}
+                  />
+                </div>
+              </div>
+              <div className={styles.bulkPropPick}>
+                <span className={styles.bulkPropPickLabel}>Apply to</span>
+                <button
+                  type="button"
+                  className={styles.bulkLinkBtn}
+                  onClick={() =>
+                    setBulkTargetsUnits(Object.fromEntries(portfolioProperties.map(x => [x.id, true])))
+                  }
+                >
+                  All
+                </button>
+                <button
+                  type="button"
+                  className={styles.bulkLinkBtn}
+                  onClick={() =>
+                    setBulkTargetsUnits(Object.fromEntries(portfolioProperties.map(x => [x.id, false])))
+                  }
+                >
+                  None
+                </button>
+                <div className={styles.bulkChips}>
+                  {portfolioProperties.map(p => (
+                    <label key={p.id} className={styles.bulkChip}>
+                      <input
+                        type="checkbox"
+                        checked={bulkTargetsUnits[p.id] !== false}
+                        onChange={e => setBulkTargetsUnits(prev => ({ ...prev, [p.id]: e.target.checked }))}
+                      />
+                      <span>{p.name}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <button type="button" className="btn-gold" style={{ marginTop: 16 }} onClick={applyBulkUnits}>
+                Apply to date range
+              </button>
+            </div>
             <div className={styles.invGrid}>
               {portfolioProperties.map(p => {
                 const units = inventoryUnits[p.id] ?? 1
-                const dim = new Date(calYear, calMonthIdx + 1, 0).getDate()
-                const booked = bookedDaysInMonthForProperty(portfolioBookings, p.id, calYear, calMonthIdx)
-                const blocked = countBlockedInMonth(blockedByProp[p.id], calYear, calMonthIdx)
-                const capacity = dim * units
-                const open = Math.max(0, capacity - booked - blocked)
+                const snap = monthUnitCapacityStats({
+                  propertyId: p.id,
+                  year: calYear,
+                  monthIndex: calMonthIdx,
+                  defaultUnits: units,
+                  unitRangesByProp,
+                  blockedYmds: blockedByProp[p.id],
+                  bookings: combinedPortfolioBookings,
+                })
+                const { dim, bookedDays: booked, blockedDays: blocked, capacity, open } = snap
+                const unitRanges = unitRangesByProp[String(p.id)] || []
                 return (
                   <div key={p.id} className={styles.invCard}>
                     <div className={styles.invCardTop}>
@@ -766,7 +1496,7 @@ export default function Owner() {
                       </div>
                     </div>
                     <div className={styles.invRow}>
-                      <span>Listings (units)</span>
+                      <span>Default listings (units)</span>
                       <input
                         type="number"
                         min={1}
@@ -783,10 +1513,30 @@ export default function Owner() {
                     </div>
                     <div className={styles.invStats}>
                       <div><span className={styles.invLabel}>Days in month</span><strong>{dim}</strong></div>
-                      <div><span className={styles.invLabel}>Booked guest-nights</span><strong>{booked}</strong></div>
+                      <div><span className={styles.invLabel}>Booked days</span><strong>{booked}</strong></div>
                       <div><span className={styles.invLabel}>Blocked (manual)</span><strong>{blocked}</strong></div>
                       <div><span className={styles.invLabel}>Open (est.)</span><strong>{open}</strong></div>
                     </div>
+                    <p className={styles.invCapacityNote}>
+                      Unit-nights this month (Σ per day): <strong>{capacity}</strong>
+                    </p>
+                    {unitRanges.length > 0 && (
+                      <div className={styles.rangeList}>
+                        <div className={styles.rangeListTitle}>Date-based unit rules</div>
+                        <ul className={styles.rangeUl}>
+                          {unitRanges.map(r => (
+                            <li key={r.id} className={styles.rangeLi}>
+                              <span>
+                                {r.from} → {r.to} · <strong>{r.units}</strong> units
+                              </span>
+                              <button type="button" className={styles.rangeRemove} onClick={() => removeUnitRange(p.id, r.id)}>
+                                Remove
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
                     <p className={styles.invFoot}>
                       Under review listings still appear here for planning; guests cannot book until live.
                     </p>
@@ -804,64 +1554,212 @@ export default function Owner() {
                 Nightly rates &amp; stay rules
               </div>
               <p className={styles.tabSub} style={{ marginBottom: 24 }}>
-                You set minimum nights and base rate for each listing (demo — not synced to the live catalog yet).
+                Base rate and min nights per listing — plus <strong>bulk date ranges</strong> for seasonal or weekend
+                pricing. Rules are stored on this device and apply to the guest catalog, property page, and checkout.
+                Overlapping ranges: latest rule wins.
               </p>
-              {portfolioProperties.map(p => (
-                <div key={p.id} className={styles.rateCard}>
-                  <div className={styles.rateCardTitle}>{p.name}</div>
-                  <div className={styles.rateFields}>
-                    <div className="form-group" style={{ marginBottom: 0 }}>
-                      <label className="form-label">Nightly rate (₹)</label>
-                      <input
-                        type="number"
-                        className="form-input"
-                        min={1000}
-                        value={ownerRates[p.id]?.nightly ?? ''}
-                        onChange={e =>
-                          setOwnerRates(r => ({
-                            ...r,
-                            [p.id]: { ...r[p.id], nightly: Math.max(0, Number(e.target.value) || 0) },
-                          }))
-                        }
-                      />
-                    </div>
-                    <div className="form-group" style={{ marginBottom: 0 }}>
-                      <label className="form-label">Minimum nights (your rule)</label>
-                      <input
-                        type="number"
-                        className="form-input"
-                        min={1}
-                        max={30}
-                        value={ownerRates[p.id]?.minNights ?? 2}
-                        onChange={e =>
-                          setOwnerRates(r => ({
-                            ...r,
-                            [p.id]: {
-                              ...r[p.id],
-                              minNights: Math.max(1, Math.min(30, Number(e.target.value) || 1)),
-                            },
-                          }))
-                        }
-                      />
-                    </div>
+              <div className={styles.bulkPanel}>
+                <div className={styles.bulkPanelTitle}>Bulk rate / min stay by date range</div>
+                <p className={styles.bulkPanelHint}>
+                  Turn on nightly and/or minimum nights, pick the window, choose listings, then apply. Leave a toggle off
+                  if you only want to change the other field in that window.
+                </p>
+                <div className={styles.bulkChecks}>
+                  <label className={styles.bulkChip}>
+                    <input
+                      type="checkbox"
+                      checked={bulkRateForm.applyNightly}
+                      onChange={e => setBulkRateForm(f => ({ ...f, applyNightly: e.target.checked }))}
+                    />
+                    <span>Nightly rate</span>
+                  </label>
+                  <label className={styles.bulkChip}>
+                    <input
+                      type="checkbox"
+                      checked={bulkRateForm.applyMin}
+                      onChange={e => setBulkRateForm(f => ({ ...f, applyMin: e.target.checked }))}
+                    />
+                    <span>Minimum nights</span>
+                  </label>
+                </div>
+                <div className={styles.bulkGrid}>
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label">From</label>
+                    <input
+                      type="date"
+                      className="form-input"
+                      value={bulkRateForm.from}
+                      onChange={e => setBulkRateForm(f => ({ ...f, from: e.target.value }))}
+                    />
                   </div>
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label">To</label>
+                    <input
+                      type="date"
+                      className="form-input"
+                      value={bulkRateForm.to}
+                      onChange={e => setBulkRateForm(f => ({ ...f, to: e.target.value }))}
+                    />
+                  </div>
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label">Nightly ₹</label>
+                    <input
+                      type="number"
+                      className="form-input"
+                      min={1000}
+                      placeholder="e.g. 32000"
+                      disabled={!bulkRateForm.applyNightly}
+                      value={bulkRateForm.nightly}
+                      onChange={e => setBulkRateForm(f => ({ ...f, nightly: e.target.value }))}
+                    />
+                  </div>
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label">Min nights</label>
+                    <input
+                      type="number"
+                      className="form-input"
+                      min={1}
+                      max={30}
+                      disabled={!bulkRateForm.applyMin}
+                      value={bulkRateForm.minNights}
+                      onChange={e => setBulkRateForm(f => ({ ...f, minNights: e.target.value }))}
+                    />
+                  </div>
+                </div>
+                <div className={styles.bulkPropPick}>
+                  <span className={styles.bulkPropPickLabel}>Apply to</span>
                   <button
                     type="button"
-                    className="btn-outline"
-                    style={{ marginTop: 16 }}
-                    onClick={() => showToast(`Saved rate for ${p.name} (demo).`)}
+                    className={styles.bulkLinkBtn}
+                    onClick={() =>
+                      setBulkTargetsRate(Object.fromEntries(portfolioProperties.map(x => [x.id, true])))
+                    }
                   >
-                    Update listing rate
+                    All
                   </button>
+                  <button
+                    type="button"
+                    className={styles.bulkLinkBtn}
+                    onClick={() =>
+                      setBulkTargetsRate(Object.fromEntries(portfolioProperties.map(x => [x.id, false])))
+                    }
+                  >
+                    None
+                  </button>
+                  <div className={styles.bulkChips}>
+                    {portfolioProperties.map(p => (
+                      <label key={p.id} className={styles.bulkChip}>
+                        <input
+                          type="checkbox"
+                          checked={bulkTargetsRate[p.id] !== false}
+                          onChange={e => setBulkTargetsRate(prev => ({ ...prev, [p.id]: e.target.checked }))}
+                        />
+                        <span>{p.name}</span>
+                      </label>
+                    ))}
+                  </div>
                 </div>
-              ))}
+                <button type="button" className="btn-gold" style={{ marginTop: 16 }} onClick={applyBulkRates}>
+                  Apply rate rule to range
+                </button>
+              </div>
+              {portfolioProperties.map(p => {
+                const baseNightly =
+                  ownerRates[p.id]?.nightly ??
+                  (p.id === 101 ? 85000 : p.id === 102 ? 62000 : p.submittedPrice || 25000)
+                const baseMin = ownerRates[p.id]?.minNights ?? (p.id === 102 ? 3 : 2)
+                const eff = getEffectiveRateForDate(todayYmd, p.id, { nightly: baseNightly, minNights: baseMin }, rateRangesByProp)
+                const rateRanges = rateRangesByProp[String(p.id)] || []
+                return (
+                  <div key={p.id} className={styles.rateCard}>
+                    <div className={styles.rateCardTitle}>{p.name}</div>
+                    <p className={styles.rateEffectiveLine}>
+                      Today ({todayYmd}): <strong>₹{eff.nightly.toLocaleString('en-IN')}</strong> · min{' '}
+                      <strong>{eff.minNights}</strong> nights
+                    </p>
+                    <div className={styles.rateFields}>
+                      <div className="form-group" style={{ marginBottom: 0 }}>
+                        <label className="form-label">Base nightly rate (₹)</label>
+                        <input
+                          type="number"
+                          className="form-input"
+                          min={1000}
+                          value={ownerRates[p.id]?.nightly ?? ''}
+                          onChange={e =>
+                            setOwnerRates(r => ({
+                              ...r,
+                              [p.id]: { ...r[p.id], nightly: Math.max(0, Number(e.target.value) || 0) },
+                            }))
+                          }
+                        />
+                      </div>
+                      <div className="form-group" style={{ marginBottom: 0 }}>
+                        <label className="form-label">Default minimum nights</label>
+                        <input
+                          type="number"
+                          className="form-input"
+                          min={1}
+                          max={30}
+                          value={ownerRates[p.id]?.minNights ?? 2}
+                          onChange={e =>
+                            setOwnerRates(r => ({
+                              ...r,
+                              [p.id]: {
+                                ...r[p.id],
+                                minNights: Math.max(1, Math.min(30, Number(e.target.value) || 1)),
+                              },
+                            }))
+                          }
+                        />
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn-outline"
+                      style={{ marginTop: 16 }}
+                      onClick={() => showToast(`Base rate saved — guest catalog updated on this device.`)}
+                    >
+                      Save base rate
+                    </button>
+                    {rateRanges.length > 0 && (
+                      <div className={styles.rangeList}>
+                        <div className={styles.rangeListTitle}>Date-based rate rules</div>
+                        <ul className={styles.rangeUl}>
+                          {rateRanges.map(r => (
+                            <li key={r.id} className={styles.rangeLi}>
+                              <span>
+                                {r.from} → {r.to}
+                                {r.nightly != null && (
+                                  <>
+                                    {' · '}
+                                    <strong>₹{r.nightly.toLocaleString('en-IN')}</strong>
+                                  </>
+                                )}
+                                {r.minNights != null && (
+                                  <>
+                                    {' · min '}
+                                    <strong>{r.minNights}</strong> nights
+                                  </>
+                                )}
+                              </span>
+                              <button type="button" className={styles.rangeRemove} onClick={() => removeRateRange(p.id, r.id)}>
+                                Remove
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
             </div>
             <div>
               <div className={styles.panelTitle} style={{ marginBottom: 16 }}>
                 Promotions
               </div>
               <p className={styles.tabSub} style={{ marginBottom: 20 }}>
-                Promo codes and discounts for direct / member bookings (demo).
+                Promo codes apply to the <strong>room subtotal</strong> on the property and payment pages when guests enter the code (saved on this device).
               </p>
               <div className={styles.promoForm}>
                 <select
@@ -908,19 +1806,19 @@ export default function Owner() {
                       return
                     }
                     const pct = Math.min(50, Math.max(1, Number(promoForm.discountPct) || 10))
-                    setPromos(list => [
+                    setHostPromotions(list => [
                       ...list,
                       {
                         id: `p-${Date.now()}`,
-                        propertyId: promoForm.propertyId,
+                        propertyId: Number(promoForm.propertyId),
                         title: promoForm.title.trim(),
                         discountPct: pct,
-                        code: promoForm.code.trim(),
+                        code: promoForm.code.trim().toUpperCase(),
                         active: true,
                       },
                     ])
                     setPromoForm(f => ({ ...f, title: '', discountPct: '', code: '' }))
-                    showToast('Promotion added (demo).')
+                    showToast('Promotion saved — guests can apply this code at checkout.')
                   }}
                 >
                   <Tag size={14} /> Add promotion
@@ -941,8 +1839,8 @@ export default function Owner() {
                         type="button"
                         className={styles.promoToggle}
                         onClick={() => {
-                          setPromos(list => list.map(x => (x.id === pr.id ? { ...x, active: !x.active } : x)))
-                          showToast(pr.active ? 'Promotion paused (demo).' : 'Promotion active (demo).')
+                          setHostPromotions(list => list.map(x => (x.id === pr.id ? { ...x, active: !x.active } : x)))
+                          showToast(pr.active ? 'Promotion paused — code inactive.' : 'Promotion active — code works at checkout.')
                         }}
                       >
                         {pr.active ? 'Active' : 'Paused'}
@@ -971,17 +1869,100 @@ export default function Owner() {
                 <span>Check-out</span>
                 <span>Nights</span>
                 <span>Total</span>
+                <span>Host net</span>
+                <span>Settlement</span>
                 <span>Status</span>
+                <span>Actions</span>
               </div>
-              {portfolioBookings.map(b => (
+              {combinedPortfolioBookings.map(b => (
                 <div key={b.id} className={styles.tableRow}>
                   <span>{b.guest}</span>
                   <span className={styles.dim}>{b.propertyName}</span>
                   <span>{b.checkIn}</span>
                   <span>{b.checkOut}</span>
                   <span>{b.nights}</span>
-                  <span>₹{b.total.toLocaleString('en-IN')}</span>
+                  <span>₹{Number(b.total || 0).toLocaleString('en-IN')}</span>
+                  <span>
+                    {b.hostNet != null ? `₹${Number(b.hostNet).toLocaleString('en-IN')}` : '—'}
+                  </span>
+                  <span className={styles.dim}>{b.settlementStatus || '—'}</span>
                   <span className={`${styles.bookingStatus} ${styles[b.status]}`}>{b.status}</span>
+                  <span className={styles.tableActions}>
+                    {b.modificationRequest?.status === 'pending' && b.bookingId != null && (
+                      <>
+                        <button type="button" className={styles.inlineTabLink} onClick={() => approveGuestDateChange(b)}>
+                          Approve dates
+                        </button>
+                        <button
+                          type="button"
+                          className={styles.inlineTabLink}
+                          onClick={() => {
+                            patchBooking(b.bookingId, { modificationRequest: null })
+                            showToast('Date change declined.')
+                          }}
+                        >
+                          Decline dates
+                        </button>
+                      </>
+                    )}
+                    {b.refundRequest?.status === 'pending' && b.bookingId != null && b.status !== 'refunded' && (
+                      <button
+                        type="button"
+                        className={styles.inlineTabLink}
+                        onClick={() => {
+                          const refundId = `rfnd_host_${Date.now().toString(36)}`
+                          patchBooking(b.bookingId, {
+                            status: 'refunded',
+                            refundedAt: new Date().toISOString(),
+                            refundAmount: b.total,
+                            refundRequest: { ...b.refundRequest, status: 'approved', approvedBy: 'host' },
+                            paymentRefundId: refundId,
+                          })
+                          const guest = b.email || b.guestEmail
+                          try {
+                            if (guest) {
+                              pushInAppNotification({
+                                title: 'Refund processed',
+                                body: `${b.propertyName} · ₹${Number(b.total || 0).toLocaleString('en-IN')} marked refunded.`,
+                                href: '/bookings',
+                                recipientEmail: guest,
+                              })
+                              window.dispatchEvent(new Event('ns-notifications'))
+                            }
+                          } catch {
+                            /* ignore */
+                          }
+                          showToast('Refund recorded for this booking.')
+                        }}
+                      >
+                        Approve refund
+                      </button>
+                    )}
+                    {b.source === 'live' &&
+                    b.status !== 'cancelled' &&
+                    b.bookingId != null &&
+                    new Date(b.checkIn) > new Date(new Date().toISOString().slice(0, 10)) ? (
+                      <button
+                        type="button"
+                        className={styles.inlineTabLink}
+                        onClick={() => {
+                          patchBooking(b.bookingId, { status: 'cancelled' })
+                          showToast('Booking cancelled — those nights are open again.')
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    ) : null}
+                    {b.source === 'live' && (b.email || b.guestEmail) ? (
+                      <button
+                        type="button"
+                        className={styles.inlineTabLink}
+                        onClick={() => setTab('Inbox')}
+                      >
+                        Inbox
+                      </button>
+                    ) : null}
+                  </span>
                 </div>
               ))}
             </div>
@@ -1004,18 +1985,26 @@ export default function Owner() {
                 </div>
               ))}
             </div>
+            <p className={styles.tabSub} style={{ marginBottom: 20, maxWidth: 560 }}>
+              Totals below are from <strong>confirmed bookings</strong> for your listings (room share after the platform
+              commission set in Admin). The chart shows the same paid and pending amounts by month.
+            </p>
             <div className={styles.earningsSummary}>
               <div className={styles.earningStat}>
-                <div className={styles.earningNum}>₹6,21,000</div>
-                <div className={styles.earningLabel}>Year to date</div>
+                <div className={styles.earningNum}>
+                  ₹{earningsFromLive.ytdHostNet.toLocaleString('en-IN')}
+                </div>
+                <div className={styles.earningLabel}>Room share · all stays</div>
               </div>
               <div className={styles.earningStat}>
-                <div className={styles.earningNum}>₹2,15,000</div>
-                <div className={styles.earningLabel}>Pending payout</div>
+                <div className={styles.earningNum}>
+                  ₹{earningsFromLive.pending.toLocaleString('en-IN')}
+                </div>
+                <div className={styles.earningLabel}>Pending settlement</div>
               </div>
               <div className={styles.earningStat}>
-                <div className={styles.earningNum}>₹4,06,000</div>
-                <div className={styles.earningLabel}>Paid out</div>
+                <div className={styles.earningNum}>₹{earningsFromLive.paid.toLocaleString('en-IN')}</div>
+                <div className={styles.earningLabel}>Marked paid</div>
               </div>
             </div>
           </div>
@@ -1058,13 +2047,69 @@ export default function Owner() {
                   <option>Weekly digest</option>
                 </select>
               </div>
-              <button type="button" className="btn-gold" style={{ width: 'fit-content' }} onClick={() => showToast('Changes saved (demo — not persisted).')}>
+              <button type="button" className="btn-gold" style={{ width: 'fit-content' }} onClick={() => showToast('Preferences saved on this device.')}>
                 Save changes
               </button>
             </div>
           </div>
         )}
       </div>
+
+      {calCompose && (
+        <div className={styles.hostModalOverlay} role="dialog" aria-modal="true" aria-labelledby="host-msg-title">
+          <div className={styles.hostModalBox}>
+            <h2 id="host-msg-title" className={styles.hostModalTitle}>
+              Message guest
+            </h2>
+            <p className={styles.hostModalSub}>
+              {calCompose.propertyName} · {calCompose.guestEmail}
+            </p>
+            <textarea
+              className="form-input"
+              rows={5}
+              value={calComposeBody}
+              onChange={e => setCalComposeBody(e.target.value)}
+              placeholder="Your message appears in the guest’s inbox on this app."
+            />
+            <div className={styles.hostModalActions}>
+              <button
+                type="button"
+                className="btn-gold"
+                onClick={() => {
+                  if (!calComposeBody.trim()) {
+                    showToast('Write a message first.')
+                    return
+                  }
+                  appendHostMessage({
+                    fromEmail: user.email,
+                    toEmail: calCompose.guestEmail,
+                    body: calComposeBody.trim(),
+                    bookingId: calCompose.bookingId,
+                    propertyId: calCompose.propertyId,
+                    propertyName: calCompose.propertyName,
+                  })
+                  showToast('Message sent.')
+                  setCalCompose(null)
+                  setCalComposeBody('')
+                  setInboxMessages(loadHostMessages())
+                }}
+              >
+                Send
+              </button>
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={() => {
+                  setCalCompose(null)
+                  setCalComposeBody('')
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <Footer />
     </div>

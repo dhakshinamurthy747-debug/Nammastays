@@ -4,6 +4,14 @@
   background: linear-gradient(135deg, var(--cream) 0%, var(--warm-white) 55%, #efe6d8 100%);
 }
 
+.bg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse 80% 50% at 50% -20%, rgba(107, 29, 46, 0.06), transparent),
+    radial-gradient(ellipse 60% 40% at 100% 50%, rgba(45, 62, 53, 0.05), transparent);
+}
+
 .card {
   position: relative; background: var(--white);
   border: 1.5px solid var(--border);
@@ -48,6 +56,35 @@
 }
 .phoneInput:focus { outline: none; }
 
+.identifierWrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--white);
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.identifierWrap:focus-within {
+  border-color: var(--burg-mid);
+  box-shadow: 0 0 0 3px rgba(107, 29, 46, 0.1);
+}
+.identifierIcon {
+  flex-shrink: 0;
+  margin-left: 14px;
+  color: var(--muted);
+}
+.identifierInput {
+  border: none !important;
+  box-shadow: none !important;
+  padding-left: 10px !important;
+  background: transparent !important;
+  width: 100%;
+}
+.identifierInput:focus {
+  outline: none;
+}
+
 .passwordWrap { position: relative; }
 .eyeBtn {
   position: absolute; right: 14px; top: 50%; transform: translateY(-50%);
@@ -81,6 +118,112 @@
 
 .roleLabel { font-size: 15px; color: var(--ink); margin-bottom: 4px; font-weight: 500; }
 .roleDesc { font-size: 13px; color: var(--muted); }
+
+.channelPicker {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 28px;
+}
+.channelBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 16px 18px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--white);
+  color: var(--body);
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s, color 0.2s, box-shadow 0.2s;
+}
+.channelBtn:hover {
+  border-color: rgba(107, 29, 46, 0.35);
+  color: var(--ink);
+}
+.channelBtnActive {
+  border-color: var(--burg-mid) !important;
+  background: rgba(107, 29, 46, 0.08) !important;
+  color: var(--burg-mid) !important;
+  box-shadow: 0 0 0 1px rgba(107, 29, 46, 0.15);
+}
+
+.loginHint {
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.loginHintMuted {
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+  opacity: 0.92;
+}
+
+.loginModeTabs {
+  display: flex;
+  gap: 0;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--cream2, var(--cream));
+}
+.loginModeTab {
+  flex: 1;
+  padding: 12px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.loginModeTab:hover {
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.5);
+}
+.loginModeTab + .loginModeTab {
+  border-left: 1.5px solid var(--border);
+}
+.loginModeTabActive {
+  background: var(--white) !important;
+  color: var(--burg-mid) !important;
+  box-shadow: inset 0 -2px 0 var(--gold, #c9a96e);
+}
+
+.otpPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
+  background: rgba(45, 62, 53, 0.04);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.otpIntro {
+  margin: 0;
+  font-size: 14px;
+  color: var(--body);
+  line-height: 1.55;
+}
+.otpRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
 
 @media (max-width: 520px) {
   .card { padding: 36px 24px; }
